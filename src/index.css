@@ -1,0 +1,71 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-display: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-sans: 'DM Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+
+    --fc-navy: #0A2463;
+    --fc-navy-active: #1E3A8A;
+    --fc-blue: #3E92CC;
+    --fc-blue-hover: #3178A8;
+    --fc-emerald: #1B998B;
+    --fc-emerald-hover: #157A6E;
+    --fc-border: #D8E4EC;
+    --fc-canvas: #F4F6FB;
+    --fc-error: #D64545;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--fc-canvas);
+    color: #0f172a;
+  }
+
+  h1, h2, h3, h4, .font-display {
+    font-family: var(--font-display);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  #erp-app-shell {
+    display: none !important;
+  }
+
+  #fixicloud-print-portal {
+    position: static !important;
+    inset: auto !important;
+    background: #ffffff !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  #fixicloud-print-sheet {
+    box-shadow: none !important;
+    border: none !important;
+    margin: 0 auto !important;
+  }
+}
