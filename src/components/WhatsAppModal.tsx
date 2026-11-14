@@ -76,13 +76,13 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
               Plantilla de Mensaje
             </label>
-            <div className="grid grid-cols-3 gap-1.5 bg-slate-100 p-1 rounded-lg">
+            <div className="grid grid-cols-3 gap-1.5 bg-[#F4F6FB] border border-[#D8E4EC]/70 p-1 rounded-xl">
               <button
                 type="button"
                 onClick={() => setTemplateType('intake')}
-                className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                className={`px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                   templateType === 'intake'
-                    ? 'bg-white text-slate-900 shadow-sm'
+                    ? 'bg-[#0A2463] text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -91,9 +91,9 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
               <button
                 type="button"
                 onClick={() => setTemplateType('quote_ready')}
-                className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                className={`px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                   templateType === 'quote_ready'
-                    ? 'bg-white text-slate-900 shadow-sm'
+                    ? 'bg-[#0A2463] text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -102,9 +102,9 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
               <button
                 type="button"
                 onClick={() => setTemplateType('ready_for_pickup')}
-                className={`px-2 py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                className={`px-2 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                   templateType === 'ready_for_pickup'
-                    ? 'bg-white text-slate-900 shadow-sm'
+                    ? 'bg-[#0A2463] text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
@@ -121,7 +121,7 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
               type="text"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-emerald-600 focus:outline-none"
+              className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#1B998B] focus:outline-none transition-colors"
             />
           </div>
 
@@ -133,11 +133,11 @@ export const WhatsAppModal: React.FC<WhatsAppModalProps> = ({
               rows={5}
               value={message}
               onChange={(e) => setMessage(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-emerald-600 focus:outline-none"
+              className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#1B998B] focus:outline-none transition-colors"
             />
           </div>
 
-          <div className="rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-[11px] text-slate-500 font-mono break-all">
+          <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC]/70 px-3 py-2 text-[11px] text-slate-500 font-mono break-all">
             {waUrl}
           </div>
 

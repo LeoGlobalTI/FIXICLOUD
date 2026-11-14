@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import {
   Camera,
   CheckCircle2,
+  Cpu,
   CreditCard,
   Home,
   Laptop,
@@ -10,6 +11,7 @@ import {
   Plus,
   Printer,
   Search,
+  Smartphone,
   Store,
   Trash2,
   Upload,
@@ -23,6 +25,7 @@ import type {
   CatalogItem,
   Client,
   CustomerAsset,
+  IndustrySector,
   LoanAsset,
   OrderStatus,
   PaymentMethod,
@@ -49,7 +52,82 @@ import {
   isSupabaseLive,
   uploadOrderPhotoToStorage,
 } from '../services/supabaseService';
+import { generateUUID } from '../utils/uuid';
 import { WhatsAppModal } from './WhatsAppModal';
+
+const STAGE_PROGRESS: Record<OrderStatus, number> = {
+  received: 20,
+  diagnosing: 40,
+  waiting_approval: 55,
+  in_repair: 75,
+  ready: 90,
+  delivered: 100,
+};
+
+const STATUS_PILL_MAP: Record<
+  OrderStatus,
+  { label: string; shortLabel: string; classes: string }
+> = {
+  received: {
+    label: 'Recibido',
+    shortLabel: 'Recibido',
+    classes: 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]',
+  },
+  diagnosing: {
+    label: 'Diagnóstico',
+    shortLabel: 'Diagnóstico',
+    classes: 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]',
+  },
+  waiting_approval: {
+    label: 'Esperando Aprobación',
+    shortLabel: 'Por Aprobar',
+    classes: 'bg-amber-50 text-amber-700 border border-amber-200',
+  },
+  in_repair: {
+    label: 'En Proceso',
+    shortLabel: 'En Proceso',
+    classes: 'bg-[#EBF4FA] text-[#3E92CC] border border-[#3E92CC]/25',
+  },
+  ready: {
+    label: 'Listo / Revisión',
+    shortLabel: 'Listo',
+    classes: 'bg-[#EBF8F6] text-[#1B998B] border border-[#1B998B]/25',
+  },
+  delivered: {
+    label: 'Entregado',
+    shortLabel: 'Entregado',
+    classes: 'bg-[#EBF8F6] text-[#157A6E] border border-[#1B998B]/30',
+  },
+};
+
+function getSectorIconMeta(sector: IndustrySector) {
+  switch (sector) {
+    case 'mobile':
+      return {
+        bg: 'bg-violet-50 text-violet-600 border-violet-200/70',
+        Icon: Smartphone,
+      };
+    case 'machinery':
+      return {
+        bg: 'bg-[#EBF8F6] text-[#1B998B] border-[#1B998B]/25',
+        Icon: Wrench,
+      };
+    case 'appliances':
+      return {
+        bg: 'bg-amber-50 text-amber-600 border-amber-200/70',
+        Icon: Cpu,
+      };
+    default:
+      return {
+        bg: 'bg-[#EBF4FA] text-[#3E92CC] border-[#3E92CC]/25',
+        Icon: Laptop,
+      };
+  }
+}
+
+const INPUT_CLASS =
+  'w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors';
+
 
 interface OrderConsoleViewProps {
   tenant: Tenant;
@@ -238,7 +316,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     if (!cat) return;
     const qty = Math.max(1, catalogQty);
     const newItem: WorkOrderItem = {
-      id: `item-${Date.now()}`,
+      id: generateUUID(),
       source: 'catalog',
       catalog_item_id: cat.id,
       sku: cat.sku,
@@ -257,7 +335,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     const price = Number(freePrice) || 0;
     const qty = Math.max(1, freeQty);
     const newItem: WorkOrderItem = {
-      id: `item-${Date.now()}`,
+      id: generateUUID(),
       source: 'free',
       description: freeDesc.trim(),
       qty,
@@ -284,7 +362,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     const amt = Number(payAmount);
     if (!amt || amt <= 0) return;
     const payment: WorkOrderPayment = {
-      id: `pay-${Date.now()}`,
+      id: generateUUID(),
       date: new Date().toISOString().slice(0, 10),
       amount: amt,
       method: payMethod,
@@ -299,7 +377,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     e.preventDefault();
     if (!activeOrder || !photoUrlInput.trim()) return;
     const photo: WorkOrderPhoto = {
-      id: `ph-${Date.now()}`,
+      id: generateUUID(),
       url: photoUrlInput.trim(),
       stage: photoStage,
       caption: photoCaption.trim() || 'Evidencia técnica adjunta',
@@ -344,7 +422,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       }
 
       const photo: WorkOrderPhoto = {
-        id: `ph-${Date.now()}`,
+        id: generateUUID(),
         url: finalUrl,
         stage: photoStage,
         caption,
@@ -367,12 +445,48 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const showZ2 = activeZone === 'all' || activeZone === 'zone2';
   const showZ3 = activeZone === 'all' || activeZone === 'zone3';
 
+  const sectorMeta = getSectorIconMeta(tenant.sector);
+  const SectorIcon = sectorMeta.Icon;
+  const currentScopeLabel =
+    activeBranchId === 'ALL'
+      ? `Todas las sucursales · ${tenant.name}`
+      : branchMap.get(activeBranchId)?.name ?? tenant.name;
+
+  const activeProgress = activeOrder ? STAGE_PROGRESS[activeOrder.status] : 0;
+  const activePill = activeOrder ? STATUS_PILL_MAP[activeOrder.status] : null;
+
   return (
     <div className="space-y-5">
-      {/* Omnichannel Instant Search + Quick Filters */}
+      {/* Page Header Row (Aligned with Overview) */}
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="font-display text-2xl sm:text-[28px] sm:leading-[36px] font-semibold text-slate-900">
+            Órdenes de Trabajo
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">
+            <span className="font-mono font-semibold text-[#0A2463] tabular-nums">
+              {filteredOrders.length}
+            </span>{' '}
+            orden(es) en vista ·{' '}
+            <span className="font-medium text-slate-800">{currentScopeLabel}</span>
+          </p>
+        </div>
+
+        <button
+          type="button"
+          onClick={onOpenNewOrder}
+          disabled={!perms.canCreateOrder}
+          className="inline-flex items-center gap-2 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-4 py-2.5 text-sm font-semibold shadow-sm transition-colors whitespace-nowrap shrink-0"
+        >
+          <Plus className="h-4 w-4" />
+          <span>Nueva Orden</span>
+        </button>
+      </div>
+
+      {/* Omnichannel Search + Quick Filters */}
       <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-4 space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="relative flex-1 min-w-[260px]">
+          <div className="relative flex-1 min-w-[240px]">
             <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
               type="text"
@@ -380,14 +494,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Buscar por Folio (OT-000105), Código, Cliente, RUT, Teléfono, Serie/IMEI o Síntoma..."
               aria-label="Buscador omnicanal de órdenes"
-              className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] pl-9 pr-8 py-2 text-sm focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+              className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/70 pl-10 pr-9 py-2 text-xs sm:text-sm text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={() => setSearchQuery('')}
                 aria-label="Limpiar búsqueda"
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
               >
                 <X className="h-4 w-4" />
               </button>
@@ -401,7 +515,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   key={mod}
                   type="button"
                   onClick={() => setModalityFilter(mod)}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
                     modalityFilter === mod
                       ? 'bg-white text-[#0A2463] shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
@@ -411,28 +525,18 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                 </button>
               ))}
             </div>
-
-            <button
-              type="button"
-              onClick={onOpenNewOrder}
-              disabled={!perms.canCreateOrder}
-              className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-4 py-2 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
-            >
-              <Plus className="h-4 w-4" />
-              <span>Nueva Orden</span>
-            </button>
           </div>
         </div>
 
-        {/* Status Filter Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* Status Filter Strip */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-[#D8E4EC]/50">
           <button
             type="button"
             onClick={() => setStatusFilter('ALL')}
-            className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap ${
               statusFilter === 'ALL'
                 ? 'bg-[#0A2463] text-white'
-                : 'bg-[#F4F6FB] text-slate-700 hover:bg-[#D8E4EC]/60'
+                : 'bg-[#F4F6FB] text-slate-600 hover:bg-[#D8E4EC]/60 hover:text-slate-900'
             }`}
           >
             Todos
@@ -445,10 +549,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                 key={st}
                 type="button"
                 onClick={() => setStatusFilter(st)}
-                className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap ${
                   active
                     ? 'bg-[#3E92CC] text-white'
-                    : 'bg-[#F4F6FB] text-slate-700 hover:bg-[#D8E4EC]/60'
+                    : 'bg-[#F4F6FB] text-slate-600 hover:bg-[#D8E4EC]/60 hover:text-slate-900'
                 }`}
               >
                 {meta.label}
@@ -459,7 +563,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
             <button
               type="button"
               onClick={() => setOnlyMyOrders((v) => !v)}
-              className={`ml-auto px-2.5 py-1 rounded-lg text-xs font-semibold border whitespace-nowrap ${
+              className={`ml-auto px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors whitespace-nowrap ${
                 onlyMyOrders
                   ? 'bg-[#EBF4FA] border-[#3E92CC] text-[#0A2463]'
                   : 'bg-white border-[#D8E4EC] text-slate-700 hover:bg-[#F4F6FB]'
@@ -472,33 +576,23 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       </div>
 
       {/* Master-Detail 2-Column Console */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Left Master List */}
-        <div className="lg:col-span-4 xl:col-span-3 rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#D8E4EC] bg-[#F4F6FB]/70 flex items-center justify-between gap-2">
-            <span className="text-xs font-semibold text-slate-800">
-              Órdenes ({filteredOrders.length})
-            </span>
-            <div className="flex items-center gap-2">
-              {activeOrder && (
-                <button
-                  type="button"
-                  onClick={() => onOpenPrintCenter(activeOrder.id)}
-                  title="Imprimir / Emitir Comprobante de la orden seleccionada"
-                  className="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white hover:bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700"
-                >
-                  <Printer className="h-3 w-3 text-blue-600" />
-                  <span>Imprimir</span>
-                </button>
-              )}
-              <span className="font-mono text-[11px] text-slate-500">
-                {activeBranchId === 'ALL' ? 'Consolidado' : branchMap.get(activeBranchId)?.code}
-              </span>
+        <div className="min-w-0 lg:col-span-5 xl:col-span-4 rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm overflow-hidden">
+          <div className="px-4 py-3.5 border-b border-[#D8E4EC]/70 bg-[#F4F6FB]/70 flex items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-sm font-semibold text-slate-900">
+                Listado de Órdenes ({filteredOrders.length})
+              </h2>
             </div>
+            <span className="font-mono text-[11px] font-medium text-slate-500">
+              {activeBranchId === 'ALL' ? 'Consolidado' : branchMap.get(activeBranchId)?.code}
+            </span>
           </div>
 
           {filteredOrders.length === 0 ? (
-            <div className="p-6 text-center space-y-2">
+            <div className="p-8 text-center space-y-3">
+              <Wrench className="h-8 w-8 text-slate-300 mx-auto" />
               <p className="text-xs font-medium text-slate-600">
                 No se encontraron órdenes con esos criterios.
               </p>
@@ -509,18 +603,18 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   setStatusFilter('ALL');
                   setModalityFilter('ALL');
                 }}
-                className="text-xs font-semibold text-blue-600 hover:underline"
+                className="inline-flex items-center rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] hover:bg-[#EBF4FA] px-3 py-1.5 text-xs font-semibold text-[#3E92CC] transition-colors"
               >
                 Limpiar filtros
               </button>
             </div>
           ) : (
-            <div className="divide-y divide-slate-100 max-h-[calc(100vh-280px)] overflow-y-auto">
+            <div className="divide-y divide-[#D8E4EC]/50 max-h-[calc(100vh-270px)] overflow-y-auto">
               {filteredOrders.map((order) => {
                 const client = clientMap.get(order.client_id);
                 const asset = assetMap.get(order.asset_id);
                 const branch = branchMap.get(order.branch_id);
-                const meta = ORDER_STATUS_META[order.status];
+                const pill = STATUS_PILL_MAP[order.status];
                 const isSelected = activeOrder?.id === order.id;
                 const fin = calculateOrderFinancials(
                   order.items,
@@ -535,32 +629,41 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                     key={order.id}
                     type="button"
                     onClick={() => onSelectOrder(order.id)}
-                    className={`w-full text-left px-4 py-3 transition-colors block ${
+                    className={`w-full text-left px-4 py-3.5 transition-colors block border-l-4 ${
                       isSelected
-                        ? 'bg-blue-50/80 ring-1 ring-inset ring-blue-200'
-                        : 'hover:bg-slate-50'
+                        ? 'bg-[#EBF4FA]/75 border-l-[#3E92CC]'
+                        : 'border-l-transparent hover:bg-[#F4F6FB]/70'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs font-bold text-blue-700">
+                      <span className="font-mono text-xs font-bold text-[#0A2463] whitespace-nowrap">
                         {order.folio}
                       </span>
-                      <span className={`text-[11px] font-semibold ${meta.textColor}`}>
-                        {meta.shortLabel}
+                      <span
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${pill.classes}`}
+                      >
+                        {pill.shortLabel}
                       </span>
                     </div>
-                    <div className="mt-1 text-xs font-semibold text-slate-900 truncate">
+                    <div className="mt-1.5 text-xs font-semibold text-slate-900 truncate">
                       {client?.name ?? 'Cliente'}
                     </div>
-                    <div className="mt-0.5 text-xs text-slate-600 truncate">
+                    <div className="mt-0.5 text-xs text-slate-500 truncate">
                       {asset ? `${asset.brand} ${asset.model}` : 'Equipo'}
                     </div>
-                    <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
-                      <span className="font-mono">
-                        {branch?.code ?? 'HQ'} · {order.modality === 'home_service' ? 'Domicilio' : 'Taller'}
+                    <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-slate-500">
+                      <span className="font-mono truncate">
+                        {branch?.code ?? 'HQ'} ·{' '}
+                        {order.modality === 'home_service' ? 'Domicilio' : 'Taller'}
                       </span>
-                      <span className="font-mono font-semibold text-slate-800 tabular-nums">
-                        {formatCurrency(fin.balanceDue, tenant.currency)}
+                      <span
+                        className={`font-mono font-semibold tabular-nums whitespace-nowrap ${
+                          fin.balanceDue > 0 ? 'text-amber-700' : 'text-[#1B998B]'
+                        }`}
+                      >
+                        {fin.balanceDue > 0
+                          ? `Saldo ${formatCurrency(fin.balanceDue, tenant.currency)}`
+                          : 'Pagado'}
                       </span>
                     </div>
                   </button>
@@ -571,157 +674,223 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
         </div>
 
         {/* Right 3-Zone Editor */}
-        <div className="lg:col-span-8 xl:col-span-9 space-y-4">
+        <div className="min-w-0 lg:col-span-7 xl:col-span-8 space-y-4">
           {!activeOrder || !financials ? (
-            <div className="rounded-xl bg-white border border-slate-200 p-10 text-center">
-              <Wrench className="h-10 w-10 text-slate-300 mx-auto" />
-              <h2 className="mt-3 text-base font-bold text-slate-800">
+            <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-12 text-center space-y-3">
+              <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EBF4FA] text-[#3E92CC]">
+                <Wrench className="h-6 w-6" />
+              </div>
+              <h2 className="font-display text-base font-semibold text-slate-900">
                 Selecciona una orden o crea una nueva
               </h2>
-              <p className="mt-1 text-xs text-slate-500">
-                La consola operativa de 3 Zonas permite editar cliente, diagnóstico, repuestos y evidencias en tiempo real.
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                La consola operativa de 3 Zonas permite editar cliente, diagnóstico, repuestos, pagos y evidencias en tiempo real.
               </p>
+              <button
+                type="button"
+                onClick={onOpenNewOrder}
+                disabled={!perms.canCreateOrder}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-4 py-2 text-xs font-semibold transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span>Nueva Orden</span>
+              </button>
             </div>
           ) : (
             <>
-              {/* Order Header Bar */}
-              <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 flex flex-wrap items-center justify-between gap-4">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2.5">
-                    <h2 className="font-mono text-lg font-bold text-[#0A2463]">
-                      {activeOrder.folio}
-                    </h2>
-                    <span className="text-[#D8E4EC]" aria-hidden="true">·</span>
-                    <button
-                      type="button"
-                      onClick={() => onOpenPublicTrackWithCode(activeOrder.tracking_code)}
-                      title="Abrir en Portal Público /track"
-                      className="font-mono text-xs font-semibold text-[#3E92CC] hover:underline"
+              {/* Active Order Header Card */}
+              <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 space-y-4">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <div
+                      className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${sectorMeta.bg}`}
                     >
-                      Código: {activeOrder.tracking_code}
-                    </button>
-                    <span className="text-[#D8E4EC]" aria-hidden="true">·</span>
-                    <span className="text-xs text-slate-500">
-                      {activeBranch?.name ?? 'Sucursal'}
-                    </span>
-                  </div>
-                  <div className="mt-1 text-xs text-slate-600">
-                    {activeClient?.name} · {activeAsset?.category} {activeAsset?.brand}{' '}
-                    {activeAsset?.model} (S/N:{' '}
-                    <span className="font-mono">{activeAsset?.serial_imei}</span>)
+                      <SectorIcon className="h-5 w-5" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center justify-between gap-2.5">
+                        <div className="flex flex-wrap items-center gap-2 min-w-0">
+                          <h2 className="font-mono text-xl font-bold text-[#0A2463] tracking-tight">
+                            {activeOrder.folio}
+                          </h2>
+                          {activePill && (
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${activePill.classes}`}
+                            >
+                              {activePill.label}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenPublicTrackWithCode(activeOrder.tracking_code)
+                            }
+                            title="Abrir en Portal Público /track"
+                            className="font-mono text-xs font-semibold text-[#3E92CC] hover:text-[#0A2463] hover:underline whitespace-nowrap"
+                          >
+                            Código: {activeOrder.tracking_code}
+                          </button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 min-w-0 w-full sm:w-auto">
+                          <div>
+                            <label htmlFor="order-status-select" className="sr-only">
+                              Estado de la orden
+                            </label>
+                            <select
+                              id="order-status-select"
+                              value={activeOrder.status}
+                              onChange={(e) =>
+                                patchOrder({ status: e.target.value as OrderStatus })
+                              }
+                              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
+                            >
+                              {(Object.keys(ORDER_STATUS_META) as OrderStatus[]).map(
+                                (st) => (
+                                  <option key={st} value={st}>
+                                    {ORDER_STATUS_META[st].label}
+                                  </option>
+                                )
+                              )}
+                            </select>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => onOpenPrintCenter(activeOrder.id)}
+                            className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+                          >
+                            <Printer className="h-3.5 w-3.5 text-[#3E92CC]" />
+                            <span>Imprimir .rpt</span>
+                          </button>
+
+                          {tenant.whatsapp_enabled ? (
+                            <button
+                              type="button"
+                              onClick={() => setShowWhatsAppModal(true)}
+                              className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
+                            >
+                              <MessageCircle className="h-3.5 w-3.5" />
+                              <span>WhatsApp</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled
+                              title="WhatsApp desactivado por configuración de empresa"
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] text-slate-500 px-3 py-1.5 text-xs font-medium cursor-not-allowed whitespace-nowrap shrink-0"
+                            >
+                              <MessageCircle className="h-3.5 w-3.5" />
+                              <span>WhatsApp desactivado</span>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="mt-1.5 text-xs text-slate-600">
+                        <span className="font-semibold text-slate-800">
+                          {activeClient?.name}
+                        </span>{' '}
+                        · {activeAsset?.category} {activeAsset?.brand}{' '}
+                        {activeAsset?.model}{' '}
+                        <span className="text-slate-400">(S/N:</span>{' '}
+                        <span className="font-mono text-slate-700">
+                          {activeAsset?.serial_imei}
+                        </span>
+                        <span className="text-slate-400">)</span> ·{' '}
+                        <span>{activeBranch?.name ?? 'Sucursal'}</span>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2.5">
-                  <div>
-                    <label htmlFor="order-status-select" className="sr-only">
-                      Estado de la orden
-                    </label>
-                    <select
-                      id="order-status-select"
-                      value={activeOrder.status}
-                      onChange={(e) =>
-                        patchOrder({ status: e.target.value as OrderStatus })
-                      }
-                      className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-slate-900 focus:border-[#3E92CC] focus:outline-none"
-                    >
-                      {(Object.keys(ORDER_STATUS_META) as OrderStatus[]).map((st) => (
-                        <option key={st} value={st}>
-                          Estado: {ORDER_STATUS_META[st].label}
-                        </option>
-                      ))}
-                    </select>
+                {/* Progress & Financial Summary Strip (Matches Overview Table) */}
+                <div className="pt-3 border-t border-[#D8E4EC]/60 flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs font-medium text-slate-500">
+                      Avance de etapa
+                    </span>
+                    <div className="w-28 h-2 rounded-full bg-[#F4F6FB] border border-[#D8E4EC]/60 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-[#3E92CC] transition-all duration-300"
+                        style={{ width: `${activeProgress}%` }}
+                      />
+                    </div>
+                    <span className="font-mono text-xs font-semibold text-slate-700 tabular-nums">
+                      {activeProgress}%
+                    </span>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => onOpenPrintCenter(activeOrder.id)}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
-                  >
-                    <Printer className="h-3.5 w-3.5 text-[#3E92CC]" />
-                    <span>Imprimir / Emitir Comprobante</span>
-                  </button>
-
-                  {tenant.whatsapp_enabled ? (
-                    <button
-                      type="button"
-                      onClick={() => setShowWhatsAppModal(true)}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0"
-                    >
-                      <MessageCircle className="h-3.5 w-3.5" />
-                      <span>Notificar por WhatsApp</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      disabled
-                      title="WhatsApp desactivado por configuración de empresa"
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] text-slate-500 px-3 py-1.5 text-xs font-medium cursor-not-allowed whitespace-nowrap shrink-0"
-                    >
-                      <MessageCircle className="h-3.5 w-3.5" />
-                      <span>WhatsApp desactivado</span>
-                    </button>
-                  )}
+                  <div className="flex flex-wrap items-center gap-4 text-xs">
+                    <div className="text-slate-600">
+                      Total:{' '}
+                      <span className="font-mono font-bold text-slate-900 tabular-nums">
+                        {formatCurrency(financials.totalAmount, tenant.currency)}
+                      </span>
+                    </div>
+                    <div className="text-slate-600">
+                      Saldo pendiente:{' '}
+                      <span
+                        className={`font-mono font-bold tabular-nums ${
+                          financials.balanceDue > 0
+                            ? 'text-amber-700'
+                            : 'text-[#1B998B]'
+                        }`}
+                      >
+                        {formatCurrency(financials.balanceDue, tenant.currency)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               </div>
 
               {/* Zone Switcher Tabs (All 3 Simultaneous vs Focus Tab) */}
-              <div className="flex flex-wrap items-center justify-between gap-2 bg-white border border-[#D8E4EC]/70 shadow-sm rounded-2xl p-2">
+              <div className="bg-white border border-[#D8E4EC]/70 shadow-sm rounded-2xl p-1.5">
                 <div className="flex flex-wrap items-center gap-1">
                   <button
                     type="button"
                     onClick={() => setActiveZone('all')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap ${
                       activeZone === 'all'
                         ? 'bg-[#0A2463] text-white'
-                        : 'text-slate-600 hover:bg-[#F4F6FB]'
+                        : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
                     }`}
                   >
-                    Vista Completa (3 Zonas)
+                    Vista Completa
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveZone('zone1')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap ${
                       activeZone === 'zone1'
                         ? 'bg-[#3E92CC] text-white'
-                        : 'text-slate-600 hover:bg-[#F4F6FB]'
+                        : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
                     }`}
                   >
-                    Zona 1: Cliente y Equipo
+                    1 · Cliente y Equipo
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveZone('zone2')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap ${
                       activeZone === 'zone2'
                         ? 'bg-[#3E92CC] text-white'
-                        : 'text-slate-600 hover:bg-[#F4F6FB]'
+                        : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
                     }`}
                   >
-                    Zona 2: Diagnóstico, Repuestos e IVA
+                    2 · Diagnóstico e IVA
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveZone('zone3')}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-colors ${
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap ${
                       activeZone === 'zone3'
                         ? 'bg-[#3E92CC] text-white'
-                        : 'text-slate-600 hover:bg-[#F4F6FB]'
+                        : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
                     }`}
                   >
-                    Zona 3: Fotos ({activeOrder.photos.length}) y Préstamo
+                    3 · Fotos ({activeOrder.photos.length}) y Préstamo
                   </button>
-                </div>
-                <div className="px-2 font-mono text-xs font-semibold text-slate-700 tabular-nums">
-                  Total: {formatCurrency(financials.totalAmount, tenant.currency)} · Saldo:{' '}
-                  <span
-                    className={
-                      financials.balanceDue > 0 ? 'text-amber-700' : 'text-[#1B998B]'
-                    }
-                  >
-                    {formatCurrency(financials.balanceDue, tenant.currency)}
-                  </span>
                 </div>
               </div>
 
@@ -729,24 +898,28 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
               {showZ1 && activeClient && activeAsset && (
                 <section
                   aria-label="Zona 1: Identificación del Cliente y Equipo"
-                  className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-5"
+                  className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 sm:p-6 space-y-5"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-200">
-                    <div className="flex items-center gap-2">
-                      <User className="h-4 w-4 text-blue-600" />
-                      <h3 className="text-sm font-bold text-slate-900">
-                        Zona 1 — Cliente, Modalidad y Equipo ({tenant.sector})
-                      </h3>
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-[#D8E4EC]/70">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#3E92CC]">
+                        <User className="h-4 w-4" />
+                      </div>
+                      <div>
+                        <h3 className="font-display text-sm font-semibold text-slate-900">
+                          Zona 1 — Cliente, Modalidad y Equipo ({tenant.sector})
+                        </h3>
+                      </div>
                     </div>
 
-                    <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+                    <div className="flex items-center gap-1 bg-[#F4F6FB] border border-[#D8E4EC] p-1 rounded-xl">
                       <button
                         type="button"
                         onClick={() => patchOrder({ modality: 'workshop' })}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                           activeOrder.modality === 'workshop'
-                            ? 'bg-white text-slate-900 shadow-sm'
-                            : 'text-slate-600'
+                            ? 'bg-white text-[#0A2463] shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
                         <Store className="h-3.5 w-3.5" />
@@ -755,10 +928,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       <button
                         type="button"
                         onClick={() => patchOrder({ modality: 'home_service' })}
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                           activeOrder.modality === 'home_service'
-                            ? 'bg-white text-slate-900 shadow-sm'
-                            : 'text-slate-600'
+                            ? 'bg-white text-[#0A2463] shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
                         }`}
                       >
                         <Home className="h-3.5 w-3.5" />
@@ -768,40 +941,46 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   </div>
 
                   {activeOrder.modality === 'home_service' && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 rounded-lg bg-cyan-50/70 border border-cyan-200 p-3.5">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 rounded-xl bg-[#EBF4FA]/60 border border-[#3E92CC]/25 p-4">
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        <label className="block text-[11px] font-semibold text-[#0A2463] mb-1">
                           Dirección de Visita a Domicilio
                         </label>
                         <input
                           type="text"
                           value={activeOrder.visit_address ?? ''}
-                          onChange={(e) => patchOrder({ visit_address: e.target.value })}
+                          onChange={(e) =>
+                            patchOrder({ visit_address: e.target.value })
+                          }
                           placeholder="Dirección exacta de atención"
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                          className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                         />
                       </div>
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                        <label className="block text-[11px] font-semibold text-[#0A2463] mb-1">
                           Fecha y Hora Programada
                         </label>
                         <input
                           type="datetime-local"
                           value={activeOrder.visit_scheduled_at ?? ''}
-                          onChange={(e) => patchOrder({ visit_scheduled_at: e.target.value })}
-                          className="w-full rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-mono focus:border-blue-600 focus:outline-none"
+                          onChange={(e) =>
+                            patchOrder({ visit_scheduled_at: e.target.value })
+                          }
+                          className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                         />
                       </div>
                     </div>
                   )}
 
-                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                     {/* Client Inputs */}
                     <div className="space-y-3">
-                      <div className="text-xs font-bold text-slate-700">Datos del Cliente</div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="text-xs font-semibold text-slate-800">
+                        Datos del Cliente
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Nombre / Razón Social
                           </label>
                           <input
@@ -810,11 +989,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             onChange={(e) =>
                               onUpdateClient({ ...activeClient, name: e.target.value })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className={INPUT_CLASS}
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             RUT / ID Tributario
                           </label>
                           <input
@@ -823,11 +1002,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             onChange={(e) =>
                               onUpdateClient({ ...activeClient, rut: e.target.value })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:border-blue-600 focus:outline-none"
+                            className={`${INPUT_CLASS} font-mono`}
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Teléfono WhatsApp
                           </label>
                           <input
@@ -836,11 +1015,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             onChange={(e) =>
                               onUpdateClient({ ...activeClient, phone: e.target.value })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:border-blue-600 focus:outline-none"
+                            className={`${INPUT_CLASS} font-mono`}
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Email
                           </label>
                           <input
@@ -849,20 +1028,26 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             onChange={(e) =>
                               onUpdateClient({ ...activeClient, email: e.target.value })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className={INPUT_CLASS}
                           />
                         </div>
                         <div className="sm:col-span-2">
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Dirección / Ciudad
                           </label>
                           <input
                             type="text"
-                            value={`${activeClient.address}${activeClient.city ? `, ${activeClient.city}` : ''}`}
+                            value={`${activeClient.address}${
+                              activeClient.city ? `, ${activeClient.city}` : ''
+                            }`}
                             onChange={(e) =>
-                              onUpdateClient({ ...activeClient, address: e.target.value, city: '' })
+                              onUpdateClient({
+                                ...activeClient,
+                                address: e.target.value,
+                                city: '',
+                              })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className={INPUT_CLASS}
                           />
                         </div>
                       </div>
@@ -870,66 +1055,78 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
 
                     {/* Equipment Inputs */}
                     <div className="space-y-3">
-                      <div className="text-xs font-bold text-slate-700">
+                      <div className="text-xs font-semibold text-slate-800">
                         Identificación del Equipo
                       </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Categoría
                           </label>
                           <input
                             type="text"
                             value={activeAsset.category}
                             onChange={(e) =>
-                              onUpdateAsset({ ...activeAsset, category: e.target.value })
+                              onUpdateAsset({
+                                ...activeAsset,
+                                category: e.target.value,
+                              })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className={INPUT_CLASS}
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Marca / Modelo
                           </label>
-                          <div className="grid grid-cols-2 gap-1.5">
+                          <div className="grid grid-cols-2 gap-2">
                             <input
                               type="text"
                               value={activeAsset.brand}
                               onChange={(e) =>
-                                onUpdateAsset({ ...activeAsset, brand: e.target.value })
+                                onUpdateAsset({
+                                  ...activeAsset,
+                                  brand: e.target.value,
+                                })
                               }
                               placeholder="Marca"
-                              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                              className={INPUT_CLASS}
                             />
                             <input
                               type="text"
                               value={activeAsset.model}
                               onChange={(e) =>
-                                onUpdateAsset({ ...activeAsset, model: e.target.value })
+                                onUpdateAsset({
+                                  ...activeAsset,
+                                  model: e.target.value,
+                                })
                               }
                               placeholder="Modelo"
-                              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                              className={INPUT_CLASS}
                             />
                           </div>
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             N° Serie / IMEI
                           </label>
                           <input
                             type="text"
                             value={activeAsset.serial_imei}
                             onChange={(e) =>
-                              onUpdateAsset({ ...activeAsset, serial_imei: e.target.value })
+                              onUpdateAsset({
+                                ...activeAsset,
+                                serial_imei: e.target.value,
+                              })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:border-blue-600 focus:outline-none"
+                            className={`${INPUT_CLASS} font-mono`}
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Clave / Patrón + Técnico
                           </label>
-                          <div className="grid grid-cols-2 gap-1.5">
+                          <div className="grid grid-cols-5 gap-2">
                             <input
                               type="text"
                               value={activeAsset.password_pattern ?? ''}
@@ -940,7 +1137,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                 })
                               }
                               placeholder="Clave"
-                              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs font-mono focus:border-blue-600 focus:outline-none"
+                              className={`${INPUT_CLASS} col-span-2 font-mono`}
                             />
                             <input
                               type="text"
@@ -949,12 +1146,12 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                 patchOrder({ assigned_technician: e.target.value })
                               }
                               placeholder="Técnico"
-                              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                              className={`${INPUT_CLASS} col-span-3`}
                             />
                           </div>
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Accesorios Recibidos
                           </label>
                           <input
@@ -963,11 +1160,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             onChange={(e) =>
                               patchOrder({ accessories_received: e.target.value })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className={INPUT_CLASS}
                           />
                         </div>
                         <div>
-                          <label className="block text-[11px] text-slate-500 mb-0.5">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             Estado Físico / Estético Entrada
                           </label>
                           <input
@@ -976,7 +1173,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             onChange={(e) =>
                               patchOrder({ entry_condition: e.target.value })
                             }
-                            className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className={INPUT_CLASS}
                           />
                         </div>
                       </div>
@@ -984,14 +1181,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   </div>
 
                   {/* Dynamic Sector Attributes */}
-                  <div className="rounded-lg bg-slate-50 border border-slate-200 p-3.5">
-                    <div className="text-[11px] font-bold text-slate-700 mb-2">
+                  <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4">
+                    <div className="text-xs font-semibold text-slate-700 mb-2.5">
                       Atributos Dinámicos del Rubro ({tenant.sector})
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       {sectorFields.map((field) => (
                         <div key={field.key}>
-                          <label className="block text-[11px] font-medium text-slate-600 mb-1">
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
                             {field.label}
                           </label>
                           <input
@@ -1007,7 +1204,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               })
                             }
                             placeholder={field.placeholder}
-                            className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#3E92CC] focus:outline-none transition-colors"
                           />
                         </div>
                       ))}
@@ -1020,18 +1217,20 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
               {showZ2 && (
                 <section
                   aria-label="Zona 2: Diagnóstico, Repuestos Híbridos y Liquidación"
-                  className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-5"
+                  className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 sm:p-6 space-y-5"
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-[#D8E4EC]">
-                    <div className="flex items-center gap-2">
-                      <Wrench className="h-4 w-4 text-[#3E92CC]" />
-                      <h3 className="text-sm font-semibold text-slate-900">
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3.5 border-b border-[#D8E4EC]/70">
+                    <div className="flex items-center gap-2.5">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#3E92CC]">
+                        <Wrench className="h-4 w-4" />
+                      </div>
+                      <h3 className="font-display text-sm font-semibold text-slate-900">
                         Zona 2 — Diagnóstico Técnico, Repuestos Híbridos y Liquidación
                       </h3>
                     </div>
                     <div className="flex items-center gap-3">
-                      <label className="inline-flex items-center gap-1.5 text-xs text-slate-600">
-                        <span className="font-semibold">Garantía (días):</span>
+                      <label className="inline-flex items-center gap-2 text-xs text-slate-600">
+                        <span className="font-medium">Garantía (días):</span>
                         <input
                           type="number"
                           min={0}
@@ -1042,10 +1241,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               warranty_days: Math.max(0, Number(e.target.value) || 0),
                             })
                           }
-                          className="w-16 rounded-md border border-slate-300 px-2 py-1 text-right font-mono text-xs tabular-nums focus:border-blue-600 focus:outline-none"
+                          className="w-16 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/70 px-2.5 py-1.5 text-right font-mono text-xs tabular-nums focus:bg-white focus:border-[#3E92CC] focus:outline-none"
                         />
                       </label>
-                      <span className="text-[11px] text-slate-500 hidden sm:inline">
+                      <span className="text-[11px] font-medium text-slate-400 hidden sm:inline">
                         Guardado automático
                       </span>
                     </div>
@@ -1054,7 +1253,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   {/* 4 Classic CP Reparaciones Textareas */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Síntomas Reportados (Cliente)
                       </label>
                       <textarea
@@ -1063,11 +1262,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         onChange={(e) =>
                           patchOrder({ reported_symptoms: e.target.value })
                         }
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs leading-relaxed focus:border-blue-600 focus:outline-none"
+                        className={`${INPUT_CLASS} leading-relaxed`}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Diagnóstico Técnico
                       </label>
                       <textarea
@@ -1078,24 +1277,26 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           patchOrder({ technical_diagnosis: e.target.value })
                         }
                         placeholder="Evaluación técnica de la falla..."
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs leading-relaxed focus:border-blue-600 focus:outline-none disabled:bg-slate-50"
+                        className={`${INPUT_CLASS} leading-relaxed disabled:opacity-60`}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Informe de Trabajo Realizado
                       </label>
                       <textarea
                         rows={2}
                         disabled={!perms.canEditDiagnosis}
                         value={activeOrder.work_performed}
-                        onChange={(e) => patchOrder({ work_performed: e.target.value })}
+                        onChange={(e) =>
+                          patchOrder({ work_performed: e.target.value })
+                        }
                         placeholder="Detalle de reparación ejecutada..."
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs leading-relaxed focus:border-blue-600 focus:outline-none disabled:bg-slate-50"
+                        className={`${INPUT_CLASS} leading-relaxed disabled:opacity-60`}
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      <label className="block text-xs font-semibold text-slate-700 mb-1.5">
                         Repuestos y Observaciones Impresas (Garantía)
                       </label>
                       <textarea
@@ -1105,15 +1306,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           patchOrder({ parts_and_observations: e.target.value })
                         }
                         placeholder="Observaciones visibles en comprobante de salida..."
-                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs leading-relaxed focus:border-blue-600 focus:outline-none"
+                        className={`${INPUT_CLASS} leading-relaxed`}
                       />
                     </div>
                   </div>
 
                   {/* Hybrid Parts & Labor System */}
-                  <div className="border-t border-slate-200 pt-4 space-y-3">
+                  <div className="border-t border-[#D8E4EC]/70 pt-5 space-y-3.5">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <h4 className="text-xs font-bold text-slate-900">
+                      <h4 className="font-display text-xs font-semibold text-slate-900">
                         Detalle Híbrido de Repuestos y Mano de Obra
                       </h4>
                       <span className="text-[11px] text-slate-500">
@@ -1123,18 +1324,18 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
 
                     {/* Add from Stock vs Free Item */}
                     {perms.canEditFinancials && (
-                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+                      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
                         {/* From Stock */}
-                        <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2">
+                        <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3.5 space-y-2.5">
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-                            <PackagePlus className="h-3.5 w-3.5 text-blue-600" />
+                            <PackagePlus className="h-3.5 w-3.5 text-[#3E92CC]" />
                             <span>1. Agregar desde Stock de Sucursal</span>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
                             <select
                               value={selectedCatalogId || branchCatalog[0]?.id || ''}
                               onChange={(e) => setSelectedCatalogId(e.target.value)}
-                              className="flex-1 min-w-[180px] rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                              className="flex-1 min-w-[180px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                             >
                               {branchCatalog.map((item) => (
                                 <option key={item.id} value={item.id}>
@@ -1148,16 +1349,18 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               min={1}
                               value={catalogQty}
                               onChange={(e) =>
-                                setCatalogQty(Math.max(1, Number(e.target.value) || 1))
+                                setCatalogQty(
+                                  Math.max(1, Number(e.target.value) || 1)
+                                )
                               }
                               aria-label="Cantidad desde stock"
-                              className="w-16 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-mono text-center"
+                              className="w-16 rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-2 text-xs font-mono text-center focus:border-[#3E92CC] focus:outline-none"
                             />
                             <button
                               type="button"
                               onClick={handleAddCatalogItem}
                               disabled={branchCatalog.length === 0}
-                              className="rounded-md bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
+                              className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
                             >
                               + Agregar Stock
                             </button>
@@ -1167,10 +1370,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         {/* Free Item */}
                         <form
                           onSubmit={handleAddFreeItem}
-                          className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2"
+                          className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3.5 space-y-2.5"
                         >
                           <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800">
-                            <Plus className="h-3.5 w-3.5 text-cyan-600" />
+                            <Plus className="h-3.5 w-3.5 text-[#0A2463]" />
                             <span>2. Agregar Ítem Libre (Fuera de Stock)</span>
                           </div>
                           <div className="flex flex-wrap items-center gap-2">
@@ -1179,7 +1382,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               value={freeDesc}
                               onChange={(e) => setFreeDesc(e.target.value)}
                               placeholder="Descripción repuesto externo o servicio..."
-                              className="flex-1 min-w-[160px] rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                              className="flex-1 min-w-[160px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                             />
                             <input
                               type="number"
@@ -1189,7 +1392,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                 setFreeQty(Math.max(1, Number(e.target.value) || 1))
                               }
                               aria-label="Cantidad ítem libre"
-                              className="w-14 rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs font-mono text-center"
+                              className="w-14 rounded-xl border border-[#D8E4EC] bg-white px-2 py-2 text-xs font-mono text-center focus:border-[#3E92CC] focus:outline-none"
                             />
                             <input
                               type="number"
@@ -1197,11 +1400,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               value={freePrice}
                               onChange={(e) => setFreePrice(e.target.value)}
                               placeholder="Precio unit."
-                              className="w-24 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono"
+                              className="w-24 rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-2 text-xs font-mono focus:border-[#3E92CC] focus:outline-none"
                             />
                             <button
                               type="submit"
-                              className="rounded-md bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
+                              className="rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
                             >
                               + Ítem Libre
                             </button>
@@ -1210,38 +1413,41 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       </div>
                     )}
 
-                    {/* Items Table */}
-                    <div className="overflow-x-auto rounded-lg border border-slate-200">
+                    {/* Items Table (Aligned with Overview Table) */}
+                    <div className="overflow-x-auto rounded-xl border border-[#D8E4EC]/80">
                       <table className="w-full text-left border-collapse text-xs">
                         <thead>
-                          <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
-                            <th className="py-2 px-3">Origen</th>
-                            <th className="py-2 px-3">Descripción</th>
-                            <th className="py-2 px-3 text-right">Cant.</th>
-                            <th className="py-2 px-3 text-right">P. Unitario</th>
-                            <th className="py-2 px-3 text-right">Subtotal</th>
-                            <th className="py-2 px-3 w-10"></th>
+                          <tr className="bg-[#F4F6FB]/70 border-b border-[#D8E4EC]/70 text-xs font-medium text-slate-500">
+                            <th className="py-2.5 px-3.5">Origen</th>
+                            <th className="py-2.5 px-3.5">Descripción</th>
+                            <th className="py-2.5 px-3.5 text-right">Cant.</th>
+                            <th className="py-2.5 px-3.5 text-right">P. Unitario</th>
+                            <th className="py-2.5 px-3.5 text-right">Subtotal</th>
+                            <th className="py-2.5 px-3 w-10"></th>
                           </tr>
                         </thead>
-                        <tbody className="divide-y divide-slate-100">
+                        <tbody className="divide-y divide-[#D8E4EC]/50">
                           {activeOrder.items.length === 0 ? (
                             <tr>
                               <td
                                 colSpan={6}
-                                className="py-4 px-3 text-center text-slate-500"
+                                className="py-5 px-3.5 text-center text-slate-500"
                               >
                                 Aún no se han cargado repuestos o mano de obra en esta orden.
                               </td>
                             </tr>
                           ) : (
                             activeOrder.items.map((item) => (
-                              <tr key={item.id} className="hover:bg-slate-50/70">
-                                <td className="py-2 px-3 font-mono text-[11px]">
+                              <tr
+                                key={item.id}
+                                className="hover:bg-[#F4F6FB]/60 transition-colors"
+                              >
+                                <td className="py-2.5 px-3.5 font-mono text-[11px] whitespace-nowrap">
                                   <span
                                     className={
                                       item.source === 'catalog'
-                                        ? 'text-blue-700 font-semibold'
-                                        : 'text-slate-600'
+                                        ? 'text-[#3E92CC] font-semibold'
+                                        : 'text-slate-500 font-medium'
                                     }
                                   >
                                     {item.source === 'catalog'
@@ -1249,28 +1455,28 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                       : 'LIBRE'}
                                   </span>
                                 </td>
-                                <td className="py-2 px-3 font-medium text-slate-800">
+                                <td className="py-2.5 px-3.5 font-medium text-slate-800">
                                   {item.description}
                                 </td>
-                                <td className="py-2 px-3 text-right font-mono tabular-nums">
+                                <td className="py-2.5 px-3.5 text-right font-mono tabular-nums text-slate-700">
                                   {item.qty}
                                 </td>
-                                <td className="py-2 px-3 text-right font-mono tabular-nums">
+                                <td className="py-2.5 px-3.5 text-right font-mono tabular-nums text-slate-700">
                                   {formatCurrency(item.unit_price, tenant.currency)}
                                 </td>
-                                <td className="py-2 px-3 text-right font-mono font-semibold text-slate-900 tabular-nums">
+                                <td className="py-2.5 px-3.5 text-right font-mono font-semibold text-slate-900 tabular-nums">
                                   {formatCurrency(
                                     item.qty * item.unit_price,
                                     tenant.currency
                                   )}
                                 </td>
-                                <td className="py-2 px-3 text-right">
+                                <td className="py-2.5 px-3 text-right">
                                   {perms.canEditFinancials && (
                                     <button
                                       type="button"
                                       onClick={() => handleRemoveOrderItem(item)}
                                       aria-label={`Eliminar ${item.description}`}
-                                      className="p-1 text-slate-400 hover:text-red-600"
+                                      className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </button>
@@ -1285,12 +1491,12 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   </div>
 
                   {/* Financial Liquidation + Payments */}
-                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 border-t border-slate-200 pt-4">
+                  <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 border-t border-[#D8E4EC]/70 pt-5">
                     {/* Payments Registration */}
                     <div className="space-y-3">
                       <div className="flex items-center justify-between">
-                        <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
-                          <CreditCard className="h-3.5 w-3.5 text-blue-600" />
+                        <h4 className="font-display text-xs font-semibold text-slate-900 flex items-center gap-1.5">
+                          <CreditCard className="h-3.5 w-3.5 text-[#3E92CC]" />
                           <span>Abonos y Pagos Registrados</span>
                         </h4>
                       </div>
@@ -1298,7 +1504,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       {perms.canReceivePayments && (
                         <form
                           onSubmit={handleAddPayment}
-                          className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 border border-slate-200 p-2.5"
+                          className="flex flex-wrap items-center gap-2 rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3"
                         >
                           <input
                             type="number"
@@ -1306,12 +1512,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             value={payAmount}
                             onChange={(e) => setPayAmount(e.target.value)}
                             placeholder="Monto abono"
-                            className="w-28 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono"
+                            className="w-28 rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono focus:border-[#3E92CC] focus:outline-none"
                           />
                           <select
                             value={payMethod}
-                            onChange={(e) => setPayMethod(e.target.value as PaymentMethod)}
-                            className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs"
+                            onChange={(e) =>
+                              setPayMethod(e.target.value as PaymentMethod)
+                            }
+                            className="rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-2 text-xs focus:border-[#3E92CC] focus:outline-none"
                           >
                             <option value="transfer">Transferencia</option>
                             <option value="cash">Efectivo</option>
@@ -1322,11 +1530,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             value={payRef}
                             onChange={(e) => setPayRef(e.target.value)}
                             placeholder="Ref. / Comprobante"
-                            className="flex-1 min-w-[100px] rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-mono"
+                            className="flex-1 min-w-[100px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono focus:border-[#3E92CC] focus:outline-none"
                           />
                           <button
                             type="submit"
-                            className="rounded-md bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
+                            className="rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
                           >
                             Registrar Abono
                           </button>
@@ -1338,14 +1546,16 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           Sin abonos registrados todavía.
                         </p>
                       ) : (
-                        <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+                        <div className="divide-y divide-[#D8E4EC]/50 rounded-xl border border-[#D8E4EC]/80 bg-white">
                           {activeOrder.payments.map((p) => (
                             <div
                               key={p.id}
-                              className="px-3 py-2 flex items-center justify-between text-xs"
+                              className="px-3.5 py-2.5 flex items-center justify-between text-xs"
                             >
-                              <div>
-                                <span className="font-mono text-slate-500">{p.date}</span>{' '}
+                              <div className="min-w-0">
+                                <span className="font-mono text-slate-500">
+                                  {p.date}
+                                </span>{' '}
                                 <span className="font-medium text-slate-800">
                                   ·{' '}
                                   {p.method === 'transfer'
@@ -1361,7 +1571,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                   </span>
                                 )}
                               </div>
-                              <span className="font-mono font-bold text-emerald-700 tabular-nums">
+                              <span className="font-mono font-bold text-[#1B998B] tabular-nums whitespace-nowrap">
                                 {formatCurrency(p.amount, tenant.currency)}
                               </span>
                             </div>
@@ -1371,11 +1581,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                     </div>
 
                     {/* Totals Summary & IVA Toggle */}
-                    <div className="rounded-2xl bg-[#F4F6FB] border border-[#D8E4EC] p-4 space-y-2.5">
-                      <div className="flex items-center justify-between pb-2 border-b border-[#D8E4EC]">
+                    <div className="rounded-2xl bg-[#F4F6FB]/80 border border-[#D8E4EC] p-5 space-y-2.5">
+                      <div className="flex items-center justify-between pb-2.5 border-b border-[#D8E4EC]">
                         <label
                           htmlFor="iva-toggle"
-                          className="text-xs font-bold text-slate-800 cursor-pointer select-none"
+                          className="text-xs font-semibold text-slate-800 cursor-pointer select-none"
                         >
                           Aplicar / Desglosar IVA ({tenant.iva_rate}%)
                         </label>
@@ -1384,7 +1594,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           type="button"
                           role="switch"
                           aria-checked={activeOrder.apply_iva}
-                          onClick={() => patchOrder({ apply_iva: !activeOrder.apply_iva })}
+                          onClick={() =>
+                            patchOrder({ apply_iva: !activeOrder.apply_iva })
+                          }
                           className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
                             activeOrder.apply_iva ? 'bg-[#1B998B]' : 'bg-slate-300'
                           }`}
@@ -1414,43 +1626,50 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           value={activeOrder.discount_amount}
                           onChange={(e) =>
                             patchOrder({
-                              discount_amount: Math.max(0, Number(e.target.value) || 0),
+                              discount_amount: Math.max(
+                                0,
+                                Number(e.target.value) || 0
+                              ),
                             })
                           }
-                          className="w-28 rounded-md border border-slate-300 bg-white px-2 py-1 text-right font-mono text-xs tabular-nums"
+                          className="w-28 rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-right font-mono text-xs tabular-nums focus:border-[#3E92CC] focus:outline-none"
                         />
                       </div>
 
                       <div className="flex items-center justify-between text-xs text-slate-600">
                         <span>
-                          IVA ({activeOrder.apply_iva ? `${tenant.iva_rate}%` : 'Exento / Sin desglose'})
+                          IVA (
+                          {activeOrder.apply_iva
+                            ? `${tenant.iva_rate}%`
+                            : 'Exento / Sin desglose'}
+                          )
                         </span>
                         <span className="font-mono font-semibold text-slate-900 tabular-nums">
                           {formatCurrency(financials.ivaAmount, tenant.currency)}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-sm font-bold text-slate-900">
+                      <div className="flex items-center justify-between pt-2.5 border-t border-[#D8E4EC] text-sm font-bold text-[#0A2463]">
                         <span>Total Orden</span>
                         <span className="font-mono tabular-nums">
                           {formatCurrency(financials.totalAmount, tenant.currency)}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between text-xs text-emerald-700 font-semibold">
+                      <div className="flex items-center justify-between text-xs text-[#1B998B] font-semibold">
                         <span>Abonos Pagados</span>
                         <span className="font-mono tabular-nums">
                           - {formatCurrency(financials.paidAmount, tenant.currency)}
                         </span>
                       </div>
 
-                      <div className="flex items-center justify-between pt-2 border-t border-slate-200 text-sm font-bold">
+                      <div className="flex items-center justify-between pt-2.5 border-t border-[#D8E4EC] text-sm font-bold">
                         <span className="text-slate-800">Saldo Pendiente</span>
                         <span
                           className={`font-mono tabular-nums ${
                             financials.balanceDue > 0
                               ? 'text-amber-700'
-                              : 'text-emerald-700'
+                              : 'text-[#1B998B]'
                           }`}
                         >
                           {formatCurrency(financials.balanceDue, tenant.currency)}
@@ -1465,32 +1684,36 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
               {showZ3 && (
                 <section
                   aria-label="Zona 3: Evidencia Fotográfica y Equipos en Préstamo"
-                  className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-5"
+                  className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 sm:p-6 space-y-5"
                 >
-                  <div className="flex items-center gap-2 pb-3 border-b border-[#D8E4EC]">
-                    <Camera className="h-4 w-4 text-[#3E92CC]" />
-                    <h3 className="text-sm font-semibold text-slate-900">
+                  <div className="flex items-center gap-2.5 pb-3.5 border-b border-[#D8E4EC]/70">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#3E92CC]">
+                      <Camera className="h-4 w-4" />
+                    </div>
+                    <h3 className="font-display text-sm font-semibold text-slate-900">
                       Zona 3 — Evidencia Fotográfica y Control de Equipo en Préstamo
                     </h3>
                   </div>
 
                   <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
                     {/* Photos Column (2/3) */}
-                    <div className="xl:col-span-2 space-y-3">
-                      <div className="text-xs font-bold text-slate-800">
+                    <div className="xl:col-span-2 space-y-3.5">
+                      <div className="font-display text-xs font-semibold text-slate-800">
                         Registro Fotográfico por Etapa ({activeOrder.photos.length})
                       </div>
 
                       <form
                         onSubmit={handleAddPhotoUrl}
-                        className="rounded-lg bg-slate-50 border border-slate-200 p-3 space-y-2.5"
+                        className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3.5 space-y-2.5"
                       >
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                           <select
                             value={photoStage}
-                            onChange={(e) => setPhotoStage(e.target.value as PhotoStage)}
+                            onChange={(e) =>
+                              setPhotoStage(e.target.value as PhotoStage)
+                            }
                             aria-label="Etapa de la fotografía"
-                            className="rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium"
+                            className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                           >
                             <option value="reception">Etapa: Recepción</option>
                             <option value="diagnosis">Etapa: Diagnóstico</option>
@@ -1501,7 +1724,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             value={photoCaption}
                             onChange={(e) => setPhotoCaption(e.target.value)}
                             placeholder="Descripción de evidencia (ej. Bisagra quebrada)"
-                            className="sm:col-span-2 rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                            className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                           />
                         </div>
 
@@ -1511,15 +1734,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             value={photoUrlInput}
                             onChange={(e) => setPhotoUrlInput(e.target.value)}
                             placeholder="Pegar URL de imagen o subir archivo local..."
-                            className="flex-1 min-w-[180px] rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                            className="flex-1 min-w-[180px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                           />
                           <button
                             type="submit"
-                            className="rounded-md bg-slate-900 hover:bg-slate-800 text-white px-3 py-1.5 text-xs font-semibold whitespace-nowrap"
+                            className="rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
                           >
                             + Agregar URL
                           </button>
-                          <label className="inline-flex items-center gap-1.5 rounded-md bg-cyan-700 hover:bg-cyan-800 text-white px-3 py-1.5 text-xs font-semibold cursor-pointer whitespace-nowrap">
+                          <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap">
                             <Camera className="h-3.5 w-3.5" />
                             <span>Tomar Foto</span>
                             <input
@@ -1531,9 +1754,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               className="hidden"
                             />
                           </label>
-                          <label className="inline-flex items-center gap-1.5 rounded-md bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 text-xs font-semibold cursor-pointer whitespace-nowrap">
+                          <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap">
                             <Upload className="h-3.5 w-3.5" />
-                            <span>{uploadingPhoto ? 'Procesando WebP...' : 'Subir Foto WebP'}</span>
+                            <span>
+                              {uploadingPhoto ? 'Procesando WebP...' : 'Subir Foto WebP'}
+                            </span>
                             <input
                               type="file"
                               accept="image/*"
@@ -1544,27 +1769,27 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                         </div>
                         {photoStatusMsg && (
-                          <div className="text-[11px] font-medium text-blue-700">
+                          <div className="text-[11px] font-medium text-[#3E92CC]">
                             {photoStatusMsg}
                           </div>
                         )}
                       </form>
 
                       {activeOrder.photos.length === 0 ? (
-                        <div className="rounded-lg border border-dashed border-slate-300 p-6 text-center text-xs text-slate-500">
+                        <div className="rounded-xl border border-dashed border-[#D8E4EC] bg-[#F4F6FB]/40 p-6 text-center text-xs text-slate-500">
                           No hay fotografías adjuntas en esta orden. Sube evidencia de recepción, diagnóstico o entrega.
                         </div>
                       ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                           {activeOrder.photos.map((photo) => (
                             <div
                               key={photo.id}
-                              className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50"
+                              className="rounded-xl border border-[#D8E4EC]/80 overflow-hidden bg-white shadow-sm"
                             >
                               <button
                                 type="button"
                                 onClick={() => setLightboxPhoto(photo)}
-                                className="block w-full aspect-video bg-slate-200 overflow-hidden"
+                                className="block w-full aspect-video bg-[#F4F6FB] overflow-hidden"
                               >
                                 <img
                                   src={photo.url}
@@ -1573,16 +1798,16 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                   className="h-full w-full object-cover hover:scale-105 transition-transform duration-200"
                                 />
                               </button>
-                              <div className="p-2.5 flex items-start justify-between gap-2">
+                              <div className="p-3 flex items-start justify-between gap-2">
                                 <div className="min-w-0">
-                                  <div className="text-[11px] font-bold text-blue-700">
+                                  <span className="inline-flex items-center rounded-full bg-[#EBF4FA] px-2 py-0.5 text-[10px] font-semibold text-[#3E92CC]">
                                     {photo.stage === 'reception'
                                       ? 'Recepción'
                                       : photo.stage === 'diagnosis'
                                       ? 'Diagnóstico'
                                       : 'Entrega'}
-                                  </div>
-                                  <p className="text-xs text-slate-700 line-clamp-2">
+                                  </span>
+                                  <p className="mt-1 text-xs text-slate-700 line-clamp-2">
                                     {photo.caption}
                                   </p>
                                 </div>
@@ -1590,7 +1815,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                   type="button"
                                   onClick={() => handleDeletePhoto(photo.id)}
                                   aria-label={`Eliminar foto ${photo.caption}`}
-                                  className="p-1 text-slate-400 hover:text-red-600 shrink-0"
+                                  className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 shrink-0 transition-colors"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
@@ -1602,9 +1827,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                     </div>
 
                     {/* Loan Equipment Column (1/3) */}
-                    <div className="space-y-3">
-                      <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                        <Laptop className="h-4 w-4 text-cyan-600" />
+                    <div className="space-y-3.5">
+                      <div className="font-display text-xs font-semibold text-slate-800 flex items-center gap-1.5">
+                        <Laptop className="h-4 w-4 text-[#3E92CC]" />
                         <span>Equipo en Préstamo (Respaldo)</span>
                       </div>
 
@@ -1619,7 +1844,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             </div>
                             <div className="mt-1 text-xs text-slate-600">
                               Prestado el{' '}
-                              {new Date(activeOrder.loan.loaned_at).toLocaleDateString('es-CL')}
+                              {new Date(
+                                activeOrder.loan.loaned_at
+                              ).toLocaleDateString('es-CL')}
                             </div>
                             {activeOrder.loan.delivery_notes && (
                               <div className="mt-1.5 text-xs text-slate-700">
@@ -1630,34 +1857,37 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           <button
                             type="button"
                             onClick={() => onReturnLoanAsset(activeOrder.id)}
-                            className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white px-3 py-2 text-xs font-semibold transition-colors"
+                            className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
                           >
                             <CheckCircle2 className="h-3.5 w-3.5" />
                             <span>Registrar Devolución del Equipo</span>
                           </button>
                         </div>
                       ) : activeOrder.loan?.returned_at ? (
-                        <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 space-y-1">
-                          <div className="text-xs font-bold text-emerald-800">
+                        <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 p-4 space-y-1">
+                          <div className="text-xs font-bold text-[#157A6E]">
                             Préstamo Devuelto Conforme
                           </div>
                           <div className="text-xs text-slate-700">
-                            {activeOrder.loan.asset_code} — {activeOrder.loan.asset_name}
+                            {activeOrder.loan.asset_code} —{' '}
+                            {activeOrder.loan.asset_name}
                           </div>
-                          <div className="text-[11px] text-slate-500">
+                          <div className="text-[11px] text-slate-500 font-mono">
                             Devuelto:{' '}
-                            {new Date(activeOrder.loan.returned_at).toLocaleDateString('es-CL')}
+                            {new Date(
+                              activeOrder.loan.returned_at
+                            ).toLocaleDateString('es-CL')}
                           </div>
                         </div>
                       ) : (
-                        <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 space-y-3">
-                          <p className="text-xs text-slate-600">
+                        <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 space-y-3">
+                          <p className="text-xs text-slate-600 leading-relaxed">
                             Asigna un equipo de respaldo disponible mientras se repara el equipo del cliente.
                           </p>
                           <select
                             value={loanAssetToAssign || availableLoans[0]?.id || ''}
                             onChange={(e) => setLoanAssetToAssign(e.target.value)}
-                            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-xs focus:border-blue-600 focus:outline-none"
+                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                           >
                             {availableLoans.length === 0 ? (
                               <option value="">No hay equipos disponibles</option>
@@ -1674,13 +1904,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             value={loanNotes}
                             onChange={(e) => setLoanNotes(e.target.value)}
                             placeholder="Accesorios entregados en préstamo..."
-                            className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-xs"
+                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                           />
                           <button
                             type="button"
                             disabled={availableLoans.length === 0}
                             onClick={() => {
-                              const targetId = loanAssetToAssign || availableLoans[0]?.id;
+                              const targetId =
+                                loanAssetToAssign || availableLoans[0]?.id;
                               if (!targetId) return;
                               onAssignLoanAsset(
                                 activeOrder.id,
@@ -1689,7 +1920,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               );
                               setLoanNotes('');
                             }}
-                            className="w-full rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-2 text-xs font-semibold transition-colors"
+                            className="w-full rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors"
                           >
                             Asignar Equipo en Préstamo
                           </button>
@@ -1707,24 +1938,24 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       {/* Photo Lightbox */}
       {lightboxPhoto && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#0A2463]/80 backdrop-blur-xs p-4"
           role="dialog"
           aria-modal="true"
           onClick={() => setLightboxPhoto(null)}
         >
           <div
-            className="max-w-3xl w-full rounded-xl bg-white overflow-hidden shadow-2xl"
+            className="max-w-3xl w-full rounded-2xl bg-white border border-[#D8E4EC] overflow-hidden shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-              <div className="text-xs font-bold text-slate-800">
+            <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#D8E4EC]/70">
+              <div className="text-xs font-semibold text-slate-800">
                 {lightboxPhoto.caption}
               </div>
               <button
                 type="button"
                 onClick={() => setLightboxPhoto(null)}
                 aria-label="Cerrar vista ampliada"
-                className="rounded-md p-1 text-slate-500 hover:bg-slate-100"
+                className="rounded-lg p-1.5 text-slate-500 hover:bg-[#F4F6FB] transition-colors"
               >
                 <X className="h-4 w-4" />
               </button>

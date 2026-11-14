@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Laptop, Minus, Package, Plus } from 'lucide-react';
 import type { Branch, CatalogItem, LoanAsset, RoleType, Tenant } from '../types/erp';
 import { formatCurrency, getRolePermissions } from '../utils/erpLogic';
+import { generateUUID } from '../utils/uuid';
 
 interface InventoryLoansViewProps {
   tenant: Tenant;
@@ -69,7 +70,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
     e.preventDefault();
     if (!name.trim()) return;
     onAddCatalogItem({
-      id: `cat-${Date.now()}`,
+      id: generateUUID(),
       tenant_id: tenant.id,
       branch_id: itemBranch || defaultBranchId,
       sku: sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -91,7 +92,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
     e.preventDefault();
     if (!loanName.trim() || !loanCode.trim()) return;
     onAddLoanAsset({
-      id: `loan-${Date.now()}`,
+      id: generateUUID(),
       tenant_id: tenant.id,
       branch_id: loanBranch || defaultBranchId,
       code: loanCode.trim().toUpperCase(),
@@ -110,10 +111,10 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900">
+          <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-slate-900">
             Stock Básico y Equipos de Préstamo
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -129,7 +130,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 tab === 'catalog'
                   ? 'bg-[#0A2463] text-white'
-                  : 'text-slate-600 hover:text-slate-900'
+                  : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
               }`}
             >
               <Package className="h-3.5 w-3.5" />
@@ -141,7 +142,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
               className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                 tab === 'loans'
                   ? 'bg-[#0A2463] text-white'
-                  : 'text-slate-600 hover:text-slate-900'
+                  : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
               }`}
             >
               <Laptop className="h-3.5 w-3.5" />
@@ -177,16 +178,16 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
           {showNewItem && (
             <form
               onSubmit={handleCreateItem}
-              className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-3"
+              className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4"
             >
-              <h2 className="text-sm font-bold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900">
                 Agregar Repuesto o Servicio al Catálogo
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <select
                   value={itemBranch}
                   onChange={(e) => setItemBranch(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 >
                   {tenantBranches.map((b) => (
                     <option key={b.id} value={b.id}>
@@ -199,7 +200,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                   value={sku}
                   onChange={(e) => setSku(e.target.value)}
                   placeholder="SKU (Ej: SSD-NVME-1TB)"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
@@ -207,12 +208,12 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Nombre repuesto o servicio *"
-                  className="sm:col-span-2 rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value as 'part' | 'service')}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 >
                   <option value="part">Repuesto Físico</option>
                   <option value="service">Servicio / Mano de Obra</option>
@@ -224,7 +225,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                     value={costPrice}
                     onChange={(e) => setCostPrice(e.target.value)}
                     placeholder="Precio Costo"
-                    className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                    className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 )}
                 <input
@@ -234,7 +235,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                   value={salePrice}
                   onChange={(e) => setSalePrice(e.target.value)}
                   placeholder="Precio Venta *"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <div className="grid grid-cols-2 gap-2">
                   <input
@@ -243,7 +244,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                     value={stockQty}
                     onChange={(e) => setStockQty(e.target.value)}
                     placeholder="Stock"
-                    className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-mono"
+                    className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-2.5 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                   <input
                     type="number"
@@ -251,21 +252,21 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                     value={minStock}
                     onChange={(e) => setMinStock(e.target.value)}
                     placeholder="Mínimo"
-                    className="rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-mono"
+                    className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-2.5 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
               </div>
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#D8E4EC]/60">
                 <button
                   type="button"
                   onClick={() => setShowNewItem(false)}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+                  className="rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white"
+                  className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white transition-colors"
                 >
                   Guardar Ítem
                 </button>
@@ -277,7 +278,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
             <div className="overflow-x-auto">
               <table className="w-full text-left border-collapse text-xs">
                 <thead>
-                  <tr className="bg-[#F4F6FB]/80 border-b border-[#D8E4EC] text-[11px] font-semibold text-slate-600">
+                  <tr className="bg-[#F4F6FB]/70 border-b border-[#D8E4EC]/70 text-[11px] font-semibold text-slate-500">
                     <th className="py-3 px-4">SKU</th>
                     <th className="py-3 px-4">Descripción</th>
                     <th className="py-3 px-4">Tipo</th>
@@ -289,47 +290,55 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                     <th className="py-3 px-4 text-center">Stock</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100">
+                <tbody className="divide-y divide-[#D8E4EC]/50">
                   {scopedCatalog.map((item) => {
                     const isLow = item.stock_qty <= item.min_stock;
                     const b = branchMap.get(item.branch_id);
                     return (
-                      <tr key={item.id} className="hover:bg-slate-50/70">
-                        <td className="py-2.5 px-4 font-mono font-semibold text-slate-700">
+                      <tr key={item.id} className="hover:bg-[#F4F6FB]/70 transition-colors">
+                        <td className="py-3 px-4 font-mono font-semibold text-[#0A2463]">
                           {item.sku}
                         </td>
-                        <td className="py-2.5 px-4 font-medium text-slate-900">
+                        <td className="py-3 px-4 font-medium text-slate-900">
                           {item.name}
                         </td>
-                        <td className="py-2.5 px-4 text-slate-600">
-                          {item.category === 'part' ? 'Repuesto' : 'Servicio'}
+                        <td className="py-3 px-4 text-slate-600">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                              item.category === 'part'
+                                ? 'bg-[#EBF4FA] text-[#3E92CC] border border-[#3E92CC]/25'
+                                : 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]'
+                            }`}
+                          >
+                            {item.category === 'part' ? 'Repuesto' : 'Servicio'}
+                          </span>
                         </td>
-                        <td className="py-2.5 px-4 text-slate-600 font-mono">
+                        <td className="py-3 px-4 text-slate-600 font-mono">
                           {b?.code ?? 'HQ'}
                         </td>
                         {perms.canManageInventoryCosts && (
-                          <td className="py-2.5 px-4 text-right font-mono text-slate-500 tabular-nums">
+                          <td className="py-3 px-4 text-right font-mono text-slate-500 tabular-nums">
                             {formatCurrency(item.cost_price, tenant.currency)}
                           </td>
                         )}
-                        <td className="py-2.5 px-4 text-right font-mono font-semibold text-slate-900 tabular-nums">
+                        <td className="py-3 px-4 text-right font-mono font-semibold text-slate-900 tabular-nums">
                           {formatCurrency(item.sale_price, tenant.currency)}
                         </td>
-                        <td className="py-2.5 px-4">
+                        <td className="py-3 px-4">
                           <div className="flex items-center justify-center gap-2">
                             {perms.canManageStock && (
                               <button
                                 type="button"
                                 onClick={() => onAdjustStock(item.id, -1)}
                                 aria-label={`Disminuir stock de ${item.name}`}
-                                className="rounded border border-slate-300 p-1 hover:bg-slate-100"
+                                className="rounded-lg border border-[#D8E4EC] bg-white p-1 text-slate-700 hover:bg-[#F4F6FB] transition-colors"
                               >
                                 <Minus className="h-3 w-3" />
                               </button>
                             )}
                             <span
                               className={`font-mono font-bold w-10 text-center tabular-nums ${
-                                isLow ? 'text-red-600' : 'text-slate-900'
+                                isLow ? 'text-[#D64545]' : 'text-slate-900'
                               }`}
                             >
                               {item.stock_qty}
@@ -339,7 +348,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                                 type="button"
                                 onClick={() => onAdjustStock(item.id, 1)}
                                 aria-label={`Aumentar stock de ${item.name}`}
-                                className="rounded border border-slate-300 p-1 hover:bg-slate-100"
+                                className="rounded-lg border border-[#D8E4EC] bg-white p-1 text-slate-700 hover:bg-[#F4F6FB] transition-colors"
                               >
                                 <Plus className="h-3 w-3" />
                               </button>
@@ -361,16 +370,16 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
           {showNewLoan && (
             <form
               onSubmit={handleCreateLoan}
-              className="rounded-xl bg-white border border-slate-200 p-5 space-y-3"
+              className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4"
             >
-              <h2 className="text-sm font-bold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900">
                 Registrar Nuevo Equipo para Préstamo
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <select
                   value={loanBranch}
                   onChange={(e) => setLoanBranch(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 >
                   {tenantBranches.map((b) => (
                     <option key={b.id} value={b.id}>
@@ -384,7 +393,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                   value={loanCode}
                   onChange={(e) => setLoanCode(e.target.value)}
                   placeholder="Código interno (Ej: PREST-04) *"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
@@ -392,41 +401,41 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                   value={loanName}
                   onChange={(e) => setLoanName(e.target.value)}
                   placeholder="Nombre descriptivo *"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
                   value={loanModel}
                   onChange={(e) => setLoanModel(e.target.value)}
                   placeholder="Marca / Especificación"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
                   value={loanSerial}
                   onChange={(e) => setLoanSerial(e.target.value)}
                   placeholder="N° Serie"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
                   value={loanNotes}
                   onChange={(e) => setLoanNotes(e.target.value)}
                   placeholder="Accesorios / Condición"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
               </div>
-              <div className="flex justify-end gap-2">
+              <div className="flex justify-end gap-2 pt-2 border-t border-[#D8E4EC]/60">
                 <button
                   type="button"
                   onClick={() => setShowNewLoan(false)}
-                  className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+                  className="rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors"
                 >
                   Cancelar
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white"
+                  className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white transition-colors"
                 >
                   Guardar Equipo Préstamo
                 </button>
@@ -434,7 +443,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
             </form>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
             {scopedLoans.map((loan) => {
               const b = branchMap.get(loan.branch_id);
               return (
@@ -444,20 +453,20 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <div className="font-mono text-xs font-bold text-blue-700">
+                      <div className="font-mono text-xs font-bold text-[#0A2463]">
                         {loan.code} · {b?.code ?? 'HQ'}
                       </div>
-                      <h3 className="text-sm font-bold text-slate-900 mt-0.5">
+                      <h3 className="text-sm font-semibold text-slate-900 mt-0.5">
                         {loan.name}
                       </h3>
                     </div>
                     <span
-                      className={`text-[11px] font-bold ${
+                      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold ${
                         loan.status === 'available'
-                          ? 'text-emerald-700'
+                          ? 'bg-[#EBF8F6] text-[#1B998B] border-[#1B998B]/25'
                           : loan.status === 'loaned'
-                          ? 'text-amber-700'
-                          : 'text-red-700'
+                          ? 'bg-amber-50 text-amber-700 border-amber-200'
+                          : 'bg-red-50 text-[#D64545] border-red-200'
                       }`}
                     >
                       {loan.status === 'available'
@@ -477,7 +486,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                     </div>
                   </div>
                   {perms.canManageStock && loan.status !== 'loaned' && (
-                    <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-xs">
+                    <div className="pt-3 border-t border-[#D8E4EC]/60 flex items-center justify-between text-xs">
                       <span className="text-slate-500">Estado operativo:</span>
                       <select
                         value={loan.status}
@@ -487,7 +496,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
                             e.target.value as LoanAsset['status']
                           )
                         }
-                        className="rounded border border-slate-300 px-2 py-1 text-xs"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/60 px-2.5 py-1 text-xs font-medium text-slate-800 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                       >
                         <option value="available">Disponible</option>
                         <option value="maintenance">En Mantención</option>

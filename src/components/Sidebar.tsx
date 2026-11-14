@@ -48,11 +48,11 @@ interface SidebarProps {
   onCloseMobile: () => void;
 }
 
-const DEMO_USER_BY_ROLE: Record<RoleType, { name: string; email: string }> = {
-  superadmin: { name: 'Sofía Mendoza', email: 'superadmin@fixicloud.cl' },
-  admin: { name: 'Rodrigo Fuentes', email: 'admin@globaltech.cl' },
-  receptionist: { name: 'Camila Herrera', email: 'recepcion@globaltech.cl' },
-  technician: { name: 'Diego Torres', email: 'diego.torres@globaltech.cl' },
+const DEMO_USER_BY_ROLE: Record<RoleType, { name: string; username: string }> = {
+  superadmin: { name: 'SuperAdmin FIXICLOUD', username: '@admin' },
+  admin: { name: 'Carolina Mendoza', username: '@carolina' },
+  receptionist: { name: 'Valentina Paredes', username: '@valentina' },
+  technician: { name: 'Diego Torres', username: '@diego' },
 };
 
 function getInitials(name: string): string {
@@ -87,9 +87,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [showUserMenu, setShowUserMenu] = useState(false);
   const perms = getRolePermissions(activeRole);
   const tenantBranches = branches.filter((b) => b.tenant_id === activeTenant.id);
+  const isTenantLockedBySession = Boolean(
+    authSession && authSession.role !== 'superadmin' && authSession.tenant_id
+  );
+  const isRoleLockedBySession = Boolean(
+    authSession && authSession.role !== 'superadmin'
+  );
+  const selectableTenants = isTenantLockedBySession
+    ? tenants.filter((t) => t.id === authSession?.tenant_id)
+    : tenants;
 
   const displayUser = authSession
-    ? { name: authSession.full_name, email: authSession.email }
+    ? { name: authSession.full_name, username: `@${authSession.username}` }
     : DEMO_USER_BY_ROLE[activeRole];
 
   const navItems: Array<{
@@ -172,14 +181,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
         />
       )}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col bg-[#0A2463] text-white border-r border-[#1E3A8A]/60 lg:static ${
+        className={`fixed inset-y-0 left-0 z-50 w-64 flex-col bg-[#0A2463] text-white border-r border-[#1E3A8A]/70 lg:static ${
           mobileOpen ? 'flex' : 'hidden lg:flex'
         }`}
       >
         {/* Header with Geometric White Logo */}
         <div className="flex items-center justify-between px-5 pt-5 pb-4">
           <div className="flex items-center gap-3 min-w-0">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/20 text-white">
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white/10 ring-1 ring-white/15 text-white shadow-sm">
               <svg
                 viewBox="0 0 24 24"
                 fill="none"
@@ -205,7 +214,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="font-display text-base font-bold tracking-tight text-white truncate">
                 FIXICLOUD
               </div>
-              <div className="text-[11px] text-[#D8E4EC]/75 truncate">
+              <div className="text-[11px] text-[#D8E4EC]/70 truncate">
                 Service &amp; Repair ERP
               </div>
             </div>
@@ -214,17 +223,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={onCloseMobile}
             aria-label="Cerrar menú lateral"
-            className="rounded-lg p-1.5 text-white/70 hover:bg-[#1E3A8A] hover:text-white lg:hidden"
+            className="rounded-xl p-1.5 text-white/70 hover:bg-[#1E3A8A] hover:text-white lg:hidden transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
         {/* Compact Tenant & Branch Selector */}
-        <div className="px-4 pb-4 border-b border-white/10 space-y-2">
-          <div className="rounded-xl bg-[#1E3A8A]/60 border border-white/10 px-2.5 py-2 space-y-1.5">
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[10px] font-medium uppercase tracking-wider text-[#D8E4EC]/70">
+        <div className="px-4 pb-4 border-b border-white/10">
+          <div className="rounded-xl bg-[#1E3A8A]/55 border border-white/10 px-3 py-2.5 space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-[#D8E4EC]/70">
                 Empresa Activa
               </span>
               {perms.canCreateTenant && (
@@ -233,14 +242,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={onOpenNewTenant}
                   title="Crear nueva empresa (Tenant)"
                   aria-label="Crear nueva empresa"
-                  className="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold text-[#3E92CC] bg-white/10 hover:bg-white/20 hover:text-white transition-colors"
+                  className="inline-flex items-center gap-0.5 rounded-lg px-2 py-0.5 text-[10px] font-semibold text-[#EBF4FA] bg-white/10 hover:bg-[#3E92CC] hover:text-white transition-colors"
                 >
                   <Plus className="h-3 w-3" />
                   <span>Nueva</span>
                 </button>
               )}
             </div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-2">
               <Building2 className="h-3.5 w-3.5 text-[#3E92CC] shrink-0" />
               <label htmlFor="tenant-selector" className="sr-only">
                 Empresa activa
@@ -248,18 +257,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <select
                 id="tenant-selector"
                 value={activeTenant.id}
+                disabled={isTenantLockedBySession}
                 onChange={(e) => onSelectTenant(e.target.value)}
-                className="w-full bg-transparent text-xs font-semibold text-white focus:outline-none cursor-pointer truncate"
+                className="w-full bg-transparent text-xs font-semibold text-white focus:outline-none cursor-pointer disabled:cursor-default truncate"
               >
-                {tenants.map((t) => (
+                {selectableTenants.map((t) => (
                   <option key={t.id} value={t.id} className="bg-[#0A2463] text-white">
                     {t.name}
                   </option>
                 ))}
               </select>
             </div>
-            <div className="flex items-center gap-1.5 pt-1 border-t border-white/10">
-              <MapPin className="h-3 w-3 text-[#1B998B] shrink-0" />
+            <div className="flex items-center gap-2 pt-2 border-t border-white/10">
+              <MapPin className="h-3.5 w-3.5 text-[#1B998B] shrink-0" />
               <span className="text-[11px] text-[#D8E4EC]/85 truncate">
                 {activeBranchId === 'ALL'
                   ? `Consolidado (${tenantBranches.length} sedes)`
@@ -278,61 +288,72 @@ export const Sidebar: React.FC<SidebarProps> = ({
             const Icon = item.icon;
             const isActive = activeSection === item.id;
             return (
-              <button
-                key={item.id}
-                type="button"
-                disabled={item.disabled}
-                onClick={() => handleNav(item.id, item.disabled)}
-                className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-[13px] font-medium transition-colors whitespace-nowrap ${
-                  isActive
-                    ? 'bg-[#1E3A8A] text-white shadow-sm'
-                    : item.disabled
-                    ? 'text-white/30 cursor-not-allowed'
-                    : 'text-[#D8E4EC]/85 hover:bg-[#1E3A8A]/50 hover:text-white'
-                }`}
-              >
-                <span className="flex items-center gap-2.5 min-w-0">
-                  <Icon
-                    className={`h-4 w-4 shrink-0 ${
-                      isActive ? 'text-white' : 'text-[#D8E4EC]/75'
-                    }`}
-                  />
-                  <span className="truncate">{item.label}</span>
-                </span>
-                {item.badge && (
-                  <span
-                    className={`font-mono text-[11px] font-semibold px-1.5 py-0.5 rounded-md ${
-                      item.badge.endsWith('!')
-                        ? 'bg-[#D64545]/25 text-red-200'
-                        : isActive
-                        ? 'bg-[#3E92CC] text-white'
-                        : 'bg-white/10 text-[#D8E4EC]'
-                    }`}
-                  >
-                    {item.badge}
-                  </span>
+              <React.Fragment key={item.id}>
+                {item.id === 'settings' && (
+                  <div className="my-2.5 border-t border-white/10" aria-hidden="true" />
                 )}
-              </button>
+                <button
+                  type="button"
+                  disabled={item.disabled}
+                  onClick={() => handleNav(item.id, item.disabled)}
+                  className={`relative w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-colors whitespace-nowrap ${
+                    isActive
+                      ? 'bg-[#1E3A8A] text-white shadow-sm ring-1 ring-white/10'
+                      : item.disabled
+                      ? 'text-white/30 cursor-not-allowed'
+                      : 'text-[#D8E4EC]/80 hover:bg-[#1E3A8A]/50 hover:text-white'
+                  }`}
+                >
+                  {isActive && (
+                    <span
+                      className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-1 rounded-r-full bg-[#3E92CC]"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <span className="flex items-center gap-2.5 min-w-0">
+                    <Icon
+                      className={`h-4 w-4 shrink-0 ${
+                        isActive ? 'text-[#6EC1F8]' : 'text-[#D8E4EC]/70'
+                      }`}
+                    />
+                    <span className="truncate">{item.label}</span>
+                  </span>
+                  {item.badge && (
+                    <span
+                      className={`font-mono tabular-nums text-[11px] font-semibold px-2 py-0.5 rounded-lg ${
+                        item.badge.endsWith('!')
+                          ? 'bg-[#D64545]/25 text-red-200 border border-[#D64545]/40'
+                          : isActive
+                          ? 'bg-[#3E92CC] text-white'
+                          : 'bg-white/10 text-[#D8E4EC]'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                </button>
+              </React.Fragment>
             );
           })}
         </nav>
 
-        {/* Sidebar Footer: Avatar + User + Role Badge + Dropdown */}
+        {/* Sidebar Footer: Avatar + User + Role Label + Dropdown */}
         <div className="border-t border-white/10 p-3.5 space-y-2.5">
           {showUserMenu && (
-            <div className="rounded-xl bg-[#1E3A8A] border border-white/15 p-3 space-y-2.5">
+            <div className="rounded-xl bg-[#1E3A8A] border border-white/15 p-3 space-y-2.5 shadow-lg">
               <div>
                 <label
                   htmlFor="role-selector"
-                  className="block text-[10px] font-medium uppercase tracking-wider text-[#D8E4EC]/75 mb-1"
+                  className="block text-[10px] font-semibold uppercase tracking-wider text-[#D8E4EC]/75 mb-1"
                 >
-                  Cambiar Rol Operativo
+                  {isRoleLockedBySession ? 'Rol de Sesión Activa' : 'Cambiar Rol Operativo'}
                 </label>
                 <select
                   id="role-selector"
                   value={activeRole}
+                  disabled={isRoleLockedBySession}
                   onChange={(e) => onSelectRole(e.target.value as RoleType)}
-                  className="w-full rounded-lg bg-[#0A2463] border border-white/15 px-2.5 py-1.5 text-xs font-medium text-white focus:border-[#3E92CC] focus:outline-none"
+                  className="w-full rounded-xl bg-[#0A2463] border border-white/15 px-2.5 py-1.5 text-xs font-medium text-white disabled:opacity-75 focus:border-[#3E92CC] focus:outline-none"
                 >
                   <option value="superadmin">SuperAdmin Global</option>
                   <option value="admin">Admin de Taller</option>
@@ -343,19 +364,32 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <div className="text-[11px] leading-snug text-[#D8E4EC]/80">
                 {perms.description}
               </div>
-              <div className="pt-1 border-t border-white/10 flex items-center justify-between">
+              <div className="pt-2 border-t border-white/10 flex flex-col gap-1.5">
                 {authSession ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onSignOut();
-                      setShowUserMenu(false);
-                    }}
-                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-white/10 hover:bg-white/20 px-2.5 py-1.5 text-xs font-semibold text-white transition-colors"
-                  >
-                    <LogOut className="h-3.5 w-3.5" />
-                    <span>Cerrar Sesión SaaS</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onOpenAuthModal();
+                        setShowUserMenu(false);
+                      }}
+                      className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-2.5 py-2 text-xs font-semibold text-white transition-colors"
+                    >
+                      <LogIn className="h-3.5 w-3.5" />
+                      <span>Cambiar de Usuario</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSignOut();
+                        setShowUserMenu(false);
+                      }}
+                      className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-white/10 hover:bg-white/20 px-2.5 py-2 text-xs font-semibold text-white transition-colors"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      <span>Cerrar Sesión</span>
+                    </button>
+                  </>
                 ) : (
                   <button
                     type="button"
@@ -363,10 +397,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onOpenAuthModal();
                       setShowUserMenu(false);
                     }}
-                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#3E92CC] hover:bg-[#3178A8] px-2.5 py-1.5 text-xs font-semibold text-white transition-colors"
+                    className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-2.5 py-2 text-xs font-semibold text-white transition-colors"
                   >
                     <LogIn className="h-3.5 w-3.5" />
-                    <span>Acceso / Registro SaaS</span>
+                    <span>Iniciar Sesión</span>
                   </button>
                 )}
               </div>
@@ -377,21 +411,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={() => setShowUserMenu((v) => !v)}
             aria-expanded={showUserMenu}
-            className="w-full flex items-center justify-between gap-2.5 rounded-xl bg-white/5 hover:bg-[#1E3A8A]/70 border border-white/10 px-2.5 py-2 text-left transition-colors"
+            className="w-full flex items-center justify-between gap-2.5 rounded-xl bg-[#1E3A8A]/45 hover:bg-[#1E3A8A]/80 border border-white/10 px-3 py-2.5 text-left transition-colors"
           >
             <div className="flex items-center gap-2.5 min-w-0">
-              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#3E92CC] text-xs font-bold text-white">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#3E92CC] text-xs font-bold text-white shadow-sm">
                 {getInitials(displayUser.name)}
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-semibold text-white truncate">
                   {displayUser.name}
                 </div>
-                <div className="text-[11px] text-[#D8E4EC]/75 truncate">
-                  {displayUser.email}
-                </div>
-                <div className="mt-1 inline-flex items-center rounded-full bg-[#1B998B]/25 border border-[#1B998B]/50 px-2 py-0.5 text-[10px] font-semibold text-[#6EE7D8]">
-                  {perms.label}
+                <div className="mt-0.5 flex items-center gap-1.5 text-[11px] min-w-0">
+                  <span className="font-mono text-[#D8E4EC]/75 shrink-0">
+                    {displayUser.username}
+                  </span>
+                  <span className="text-white/30" aria-hidden="true">
+                    ·
+                  </span>
+                  <span className="font-semibold text-[#6EE7D8] truncate">
+                    {perms.label}
+                  </span>
                 </div>
               </div>
             </div>

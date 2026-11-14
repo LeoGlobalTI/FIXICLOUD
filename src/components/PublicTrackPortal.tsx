@@ -191,7 +191,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
             </button>
           </form>
 
-          {/* Demo Quick Test Buttons */}
+            {/* Demo Quick Test Buttons */}
           <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
             <span className="text-slate-500 font-medium">Códigos de prueba rápida:</span>
             {orders.slice(0, 5).map((ord) => (
@@ -202,10 +202,10 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                   setInputCode(ord.tracking_code);
                   setSearchedCode(ord.tracking_code);
                 }}
-                className={`rounded-md border px-2.5 py-1 font-mono text-xs transition-colors ${
+                className={`rounded-xl border px-3 py-1.5 font-mono text-xs transition-colors ${
                   normalized === ord.tracking_code.toUpperCase()
-                    ? 'bg-blue-50 border-blue-300 text-blue-800 font-bold'
-                    : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                    ? 'bg-[#EBF4FA] border-[#3E92CC]/40 text-[#0A2463] font-bold'
+                    : 'bg-[#F4F6FB] border-[#D8E4EC] text-slate-700 hover:bg-white hover:border-[#3E92CC]/40'
                 }`}
               >
                 {ord.tracking_code} ({ord.folio})
@@ -215,12 +215,12 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
         </section>
 
         {rpcLoading ? (
-          <div className="rounded-xl bg-white border border-slate-200 p-10 text-center text-xs font-medium text-slate-600">
+          <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-10 text-center text-xs font-medium text-slate-600">
             Consultando estado en vivo vía Supabase RPC...
           </div>
         ) : !matchedOrder || !tenant || !financials ? (
-          <div className="rounded-xl bg-white border border-slate-200 p-10 text-center">
-            <p className="text-sm font-bold text-slate-800">
+          <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-10 text-center">
+            <p className="text-sm font-semibold text-slate-800">
               No encontramos una orden con el código &ldquo;{searchedCode}&rdquo;
             </p>
             <p className="mt-1 text-xs text-slate-500">
@@ -233,11 +233,11 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
             <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-6">
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <div className="text-xs font-semibold text-blue-600">
+                  <div className="text-xs font-semibold text-[#3E92CC]">
                     {tenant.name} · {branch?.name ?? 'Casa Matriz'}
                   </div>
-                  <h2 className="mt-1 text-lg font-bold text-slate-900">
-                    Orden <span className="font-mono">{matchedOrder.folio}</span> —{' '}
+                  <h2 className="mt-1 text-lg font-semibold text-slate-900">
+                    Orden <span className="font-mono font-bold text-[#0A2463]">{matchedOrder.folio}</span> —{' '}
                     {asset ? `${asset.category} ${asset.brand} ${asset.model}` : 'Equipo'}
                   </h2>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
@@ -245,7 +245,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                     <span aria-hidden="true">·</span>
                     <span className="font-mono">S/N: {asset?.serial_imei}</span>
                     <span aria-hidden="true">·</span>
-                    <span>Código: {matchedOrder.tracking_code}</span>
+                    <span className="font-mono">Código: {matchedOrder.tracking_code}</span>
                   </div>
                 </div>
 
@@ -262,7 +262,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               </div>
 
               {/* 6-Step Progress Bar */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
                 {PROGRESS_STEPS.map((st, idx) => {
                   const currentIdx = ORDER_STATUS_META[matchedOrder.status].stepIndex;
                   const done = idx <= currentIdx;
@@ -270,12 +270,12 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                   return (
                     <div
                       key={st}
-                      className={`rounded-lg border p-3 ${
+                      className={`rounded-xl border p-3.5 ${
                         isCurrent
-                          ? 'bg-blue-50 border-blue-400'
+                          ? 'bg-[#EBF4FA] border-[#3E92CC]'
                           : done
-                          ? 'bg-emerald-50/70 border-emerald-200'
-                          : 'bg-slate-50 border-slate-200 opacity-60'
+                          ? 'bg-[#EBF8F6] border-[#1B998B]/30'
+                          : 'bg-[#F4F6FB] border-[#D8E4EC] opacity-65'
                       }`}
                     >
                       <div className="flex items-center justify-between">
@@ -285,12 +285,12 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                         {done && (
                           <CheckCircle2
                             className={`h-4 w-4 ${
-                              isCurrent ? 'text-blue-600' : 'text-emerald-600'
+                              isCurrent ? 'text-[#3E92CC]' : 'text-[#1B998B]'
                             }`}
                           />
                         )}
                       </div>
-                      <div className="mt-1.5 text-xs font-bold text-slate-900">
+                      <div className="mt-1.5 text-xs font-semibold text-slate-900">
                         {ORDER_STATUS_META[st].label}
                       </div>
                     </div>
@@ -302,7 +302,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
             {/* Technical Report & Financial Summary */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               <div className="lg:col-span-7 rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-sm font-semibold text-slate-900 pb-2 border-b border-[#D8E4EC]/70">
                   Informe Técnico y Diagnóstico
                 </h3>
 
@@ -341,8 +341,8 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                 </div>
 
                 {branch && (
-                  <div className="pt-3 border-t border-slate-200 flex items-start gap-2 text-xs text-slate-600">
-                    <MapPin className="h-4 w-4 text-blue-600 shrink-0 mt-0.5" />
+                  <div className="pt-3 border-t border-[#D8E4EC]/70 flex items-start gap-2 text-xs text-slate-600">
+                    <MapPin className="h-4 w-4 text-[#3E92CC] shrink-0 mt-0.5" />
                     <div>
                       <div className="font-semibold text-slate-800">
                         {branch.name} — {branch.address}, {branch.city}
@@ -356,11 +356,11 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               </div>
 
               <div className="lg:col-span-5 rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-                <h3 className="text-sm font-bold text-slate-900">
+                <h3 className="text-sm font-semibold text-slate-900 pb-2 border-b border-[#D8E4EC]/70">
                   Detalle de Presupuesto y Saldo
                 </h3>
 
-                <div className="divide-y divide-slate-100 text-xs">
+                <div className="divide-y divide-[#D8E4EC]/50 text-xs">
                   {matchedOrder.items.length === 0 ? (
                     <p className="py-3 text-slate-500">
                       Presupuesto aún en elaboración técnica.
@@ -369,10 +369,10 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                     matchedOrder.items.map((item) => (
                       <div
                         key={item.id}
-                        className="py-2 flex items-center justify-between gap-2"
+                        className="py-2.5 flex items-center justify-between gap-2"
                       >
                         <div className="text-slate-800">
-                          <span className="font-mono text-slate-500">{item.qty}x</span>{' '}
+                          <span className="font-mono text-[#0A2463] font-semibold">{item.qty}x</span>{' '}
                           {item.description}
                         </div>
                         <div className="font-mono font-semibold text-slate-900 tabular-nums shrink-0">
@@ -383,7 +383,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                   )}
                 </div>
 
-                <div className="border-t border-slate-200 pt-3 space-y-1.5 text-xs">
+                <div className="border-t border-[#D8E4EC]/70 pt-3 space-y-1.5 text-xs">
                   <div className="flex justify-between text-slate-600">
                     <span>Subtotal</span>
                     <span className="font-mono tabular-nums">
@@ -406,23 +406,23 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                       {formatCurrency(financials.ivaAmount, tenant.currency)}
                     </span>
                   </div>
-                  <div className="flex justify-between text-sm font-bold text-slate-900 pt-1.5 border-t border-slate-200">
+                  <div className="flex justify-between text-sm font-bold text-[#0A2463] pt-2 border-t border-[#D8E4EC]/70">
                     <span>Total</span>
                     <span className="font-mono tabular-nums">
                       {formatCurrency(financials.totalAmount, tenant.currency)}
                     </span>
                   </div>
-                  <div className="flex justify-between text-emerald-700 font-semibold">
+                  <div className="flex justify-between text-[#1B998B] font-semibold">
                     <span>Abonado</span>
                     <span className="font-mono tabular-nums">
                       - {formatCurrency(financials.paidAmount, tenant.currency)}
                     </span>
                   </div>
-                  <div className="flex justify-between text-sm font-bold pt-1.5 border-t border-slate-200">
+                  <div className="flex justify-between text-sm font-bold pt-2 border-t border-[#D8E4EC]/70">
                     <span>Saldo Pendiente</span>
                     <span
                       className={`font-mono tabular-nums ${
-                        financials.balanceDue > 0 ? 'text-amber-700' : 'text-emerald-700'
+                        financials.balanceDue > 0 ? 'text-amber-700' : 'text-[#1B998B]'
                       }`}
                     >
                       {formatCurrency(financials.balanceDue, tenant.currency)}
@@ -434,10 +434,10 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
 
             {/* Evidence Gallery */}
             {matchedOrder.photos.length > 0 && (
-              <section className="rounded-xl bg-white border border-slate-200 p-5 space-y-3">
-                <div className="flex items-center gap-2">
-                  <Camera className="h-4 w-4 text-blue-600" />
-                  <h3 className="text-sm font-bold text-slate-900">
+              <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
+                <div className="flex items-center gap-2 pb-2 border-b border-[#D8E4EC]/70">
+                  <Camera className="h-4 w-4 text-[#3E92CC]" />
+                  <h3 className="text-sm font-semibold text-slate-900">
                     Evidencia Fotográfica del Taller ({matchedOrder.photos.length})
                   </h3>
                 </div>
@@ -445,7 +445,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                   {matchedOrder.photos.map((photo) => (
                     <div
                       key={photo.id}
-                      className="rounded-lg border border-slate-200 overflow-hidden bg-slate-50"
+                      className="rounded-2xl border border-[#D8E4EC]/70 overflow-hidden bg-[#F4F6FB]/60"
                     >
                       <button
                         type="button"
@@ -459,8 +459,8 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                           className="h-full w-full object-cover"
                         />
                       </button>
-                      <div className="p-3">
-                        <div className="text-[11px] font-bold text-blue-700">
+                      <div className="p-3.5">
+                        <div className="text-[11px] font-bold text-[#0A2463]">
                           {photo.stage === 'reception'
                             ? 'Recepción'
                             : photo.stage === 'diagnosis'
@@ -480,24 +480,24 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
 
       {lightboxPhoto && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[#0A2463]/80 backdrop-blur-[2px] p-4"
           role="dialog"
           aria-modal="true"
           onClick={() => setLightboxPhoto(null)}
         >
           <div
-            className="max-w-3xl w-full rounded-xl bg-white overflow-hidden"
+            className="max-w-3xl w-full rounded-2xl bg-white border border-[#D8E4EC] shadow-2xl overflow-hidden"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
-              <span className="text-xs font-bold text-slate-800">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-[#D8E4EC]">
+              <span className="text-xs font-semibold text-slate-800">
                 {lightboxPhoto.caption}
               </span>
               <button
                 type="button"
                 onClick={() => setLightboxPhoto(null)}
                 aria-label="Cerrar foto"
-                className="p-1 text-slate-500 hover:bg-slate-100 rounded"
+                className="p-1.5 text-slate-500 hover:bg-[#F4F6FB] rounded-xl"
               >
                 <X className="h-4 w-4" />
               </button>

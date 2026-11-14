@@ -1,49 +1,63 @@
 import React, { useEffect, useState } from 'react';
-import { Building2, MapPin, MessageCircle, Plus, Trash2, Users } from 'lucide-react';
+import {
+  Building2,
+  KeyRound,
+  MapPin,
+  MessageCircle,
+  Plus,
+  Trash2,
+  Users,
+} from 'lucide-react';
 import type {
+  AppUser,
   Branch,
   IndustrySector,
   RoleType,
-  TeamProfile,
   Tenant,
 } from '../types/erp';
 import { SECTOR_LABELS, getRolePermissions } from '../utils/erpLogic';
+import { generateUUID } from '../utils/uuid';
+import { AlertBanner } from './ui/AlertBanner';
 import { ConfirmSuccessModal } from './ui/ConfirmSuccessModal';
 
 interface SettingsBranchesViewProps {
   tenant: Tenant;
   branches: Branch[];
-  profiles: TeamProfile[];
+  appUsers: AppUser[];
   activeRole: RoleType;
   initialTab?: 'company' | 'users';
   onUpdateTenant: (tenant: Tenant) => void;
   onAddBranch: (branch: Branch) => void;
   onDeleteBranch: (branchId: string) => void;
-  onAddProfile: (profile: TeamProfile) => void;
-  onUpdateProfile: (profile: TeamProfile) => void;
+  onAddAppUser: (user: AppUser) => Promise<{ ok: boolean; error?: string }>;
+  onUpdateAppUser: (user: AppUser) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   tenant,
   branches,
-  profiles,
+  appUsers,
   activeRole,
   initialTab = 'company',
   onUpdateTenant,
   onAddBranch,
   onDeleteBranch,
-  onAddProfile,
-  onUpdateProfile,
+  onAddAppUser,
+  onUpdateAppUser,
 }) => {
   const perms = getRolePermissions(activeRole);
   const tenantBranches = branches.filter((b) => b.tenant_id === tenant.id);
-  const tenantProfiles = profiles.filter((p) => p.tenant_id === tenant.id);
+  const visibleAppUsers = appUsers.filter(
+    (u) => u.tenant_id === tenant.id || (activeRole === 'superadmin' && u.tenant_id === null)
+  );
 
   const [tab, setTab] = useState<'company' | 'users'>(initialTab);
-  const [invitedUserInfo, setInvitedUserInfo] = useState<{
-    name: string;
-    email: string;
+  const [createdUserInfo, setCreatedUserInfo] = useState<{
+    fullName: string;
+    username: string;
   } | null>(null);
+  const [userError, setUserError] = useState<string | null>(null);
+  const [savingUser, setSavingUser] = useState(false);
 
   useEffect(() => {
     setTab(initialTab);
@@ -58,10 +72,11 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   const [bPhone, setBPhone] = useState('');
   const [bHours, setBHours] = useState('Lun-Vie 09:00 - 18:30');
 
-  // New Team Member state
+  // New AppUser state (public.app_users)
   const [showNewUser, setShowNewUser] = useState(false);
-  const [uName, setUName] = useState('');
-  const [uEmail, setUEmail] = useState('');
+  const [uFullName, setUFullName] = useState('');
+  const [uUsername, setUUsername] = useState('');
+  const [uPinOrPassword, setUPinOrPassword] = useState('');
   const [uRole, setURole] = useState<RoleType>('technician');
   const [uBranchId, setUBranchId] = useState<string>('');
 
@@ -69,7 +84,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     e.preventDefault();
     if (!bName.trim()) return;
     onAddBranch({
-      id: `branch-${Date.now()}`,
+      id: generateUUID(),
       tenant_id: tenant.id,
       name: bName.trim(),
       code: bCode.trim().toUpperCase() || `SUC-${tenantBranches.length + 1}`,
@@ -87,50 +102,87 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     setShowNewBranch(false);
   };
 
-  const handleCreateUser = (e: React.FormEvent) => {
+  const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const createdName = uName.trim();
-    const createdEmail = uEmail.trim();
-    onAddProfile({
-      id: `prof-${Date.now()}`,
-      tenant_id: tenant.id,
-      branch_id: uBranchId ? uBranchId : null,
-      full_name: createdName,
-      email: createdEmail,
+    setUserError(null);
+
+    const cleanName = uFullName.trim();
+    const cleanUsername = uUsername.trim();
+    const cleanPassword = uPinOrPassword.trim();
+
+    if (!cleanName || !cleanUsername || !cleanPassword) {
+      setUserError('Completa nombre completo, usuario y contraseña / PIN.');
+      return;
+    }
+
+    const duplicate = appUsers.some(
+      (u) => u.username.trim().toLowerCase() === cleanUsername.toLowerCase()
+    );
+    if (duplicate) {
+      setUserError(`El usuario "${cleanUsername}" ya existe en FIXICLOUD.`);
+      return;
+    }
+
+    const newUser: AppUser = {
+      id: generateUUID(),
+      tenant_id: uRole === 'superadmin' ? null : tenant.id,
+      branch_id: uRole === 'superadmin' ? null : uBranchId ? uBranchId : null,
+      username: cleanUsername,
+      pin_or_password: cleanPassword,
+      full_name: cleanName,
       role: uRole,
-      active: true,
+      is_active: true,
       created_at: new Date().toISOString(),
-    });
-    setUName('');
-    setUEmail('');
+    };
+
+    setSavingUser(true);
+    const res = await onAddAppUser(newUser);
+    setSavingUser(false);
+
+    if (!res.ok) {
+      setUserError(res.error ?? 'No se pudo guardar el usuario en public.app_users.');
+      return;
+    }
+
+    setUFullName('');
+    setUUsername('');
+    setUPinOrPassword('');
     setURole('technician');
     setUBranchId('');
     setShowNewUser(false);
-    setInvitedUserInfo({ name: createdName, email: createdEmail });
+    setCreatedUserInfo({ fullName: cleanName, username: cleanUsername });
+  };
+
+  const handleUpdateUser = async (nextUser: AppUser) => {
+    setUserError(null);
+    const res = await onUpdateAppUser(nextUser);
+    if (!res.ok) {
+      setUserError(res.error ?? 'No se pudo actualizar el usuario en public.app_users.');
+    }
   };
 
   const branchMap = new Map(tenantBranches.map((b) => [b.id, b]));
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900">
-            Sucursales, Roles y Configuración Multiempresa
+          <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-slate-900">
+            Configuración y Usuarios
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Administra los datos tributarios, IVA, Casa Matriz, sucursales, WhatsApp y usuarios de {tenant.name}.
+            Administra datos tributarios, IVA, Casa Matriz, sucursales, WhatsApp y credenciales de {tenant.name}.
           </p>
         </div>
 
-        <div className="flex items-center gap-1 bg-white border border-[#D8E4EC] p-1 rounded-xl shadow-sm">
+        <div className="flex flex-wrap items-center gap-1 bg-white border border-[#D8E4EC] p-1 rounded-xl shadow-sm">
           <button
             type="button"
             onClick={() => setTab('company')}
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
               tab === 'company'
                 ? 'bg-[#0A2463] text-white'
-                : 'text-slate-600 hover:text-slate-900'
+                : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
             }`}
           >
             <Building2 className="h-3.5 w-3.5" />
@@ -142,11 +194,11 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
             className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg transition-colors ${
               tab === 'users'
                 ? 'bg-[#0A2463] text-white'
-                : 'text-slate-600 hover:text-slate-900'
+                : 'text-slate-600 hover:bg-[#F4F6FB] hover:text-slate-900'
             }`}
           >
             <Users className="h-3.5 w-3.5" />
-            <span>Usuarios y Roles del Taller ({tenantProfiles.length})</span>
+            <span>Gestión de Usuarios de FIXICLOUD ({visibleAppUsers.length})</span>
           </button>
         </div>
       </div>
@@ -156,14 +208,14 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
             {/* Company & Tax Config */}
             <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-              <div className="flex items-center gap-2 pb-3 border-b border-[#D8E4EC]">
+              <div className="flex items-center gap-2 pb-3 border-b border-[#D8E4EC]/70">
                 <Building2 className="h-4 w-4 text-[#3E92CC]" />
                 <h2 className="text-sm font-semibold text-slate-900">
                   Identidad Tributaria y Parámetros Operativos
                 </h2>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
                     Razón Social / Nombre Comercial
@@ -172,7 +224,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                     type="text"
                     value={tenant.name}
                     onChange={(e) => onUpdateTenant({ ...tenant, name: e.target.value })}
-                    className="w-full rounded-xl border border-[#D8E4EC] px-3 py-2 text-sm focus:border-[#3E92CC] focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -184,7 +236,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                     type="text"
                     value={tenant.tax_id}
                     onChange={(e) => onUpdateTenant({ ...tenant, tax_id: e.target.value })}
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -200,7 +252,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         sector: e.target.value as IndustrySector,
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   >
                     {(Object.keys(SECTOR_LABELS) as IndustrySector[]).map((sec) => (
                       <option key={sec} value={sec}>
@@ -225,7 +277,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         iva_rate: Math.max(0, Number(e.target.value) || 0),
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -242,7 +294,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         folio_prefix: e.target.value.toUpperCase(),
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -261,7 +313,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         warranty_days: Math.max(0, Number(e.target.value) || 0),
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -279,7 +331,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                       })
                     }
                     placeholder="Condiciones de diagnóstico, retiro, respaldo de datos y garantía impresas en Entrada.rpt / Salida.rpt..."
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
               </div>
@@ -287,7 +339,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
 
             {/* Master WhatsApp Switch & Templates */}
             <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-              <div className="flex items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]">
+              <div className="flex items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]/70">
                 <div className="flex items-center gap-2">
                   <MessageCircle className="h-4 w-4 text-[#1B998B]" />
                   <h2 className="text-sm font-semibold text-slate-900">
@@ -296,7 +348,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2.5">
-                  <span className="text-xs font-medium text-slate-600">
+                  <span className="text-xs font-semibold text-slate-600">
                     {tenant.whatsapp_enabled ? 'Activado' : 'Desactivado'}
                   </span>
                   <button
@@ -325,7 +377,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
 
               <p className="text-xs text-slate-500">
                 Variables disponibles:{' '}
-                <span className="font-mono text-slate-700">
+                <span className="font-mono text-[#0A2463]">
                   {'{cliente} {folio} {equipo} {codigo} {url_seguimiento} {diagnostico} {total} {saldo} {sucursal} {horario}'}
                 </span>
               </p>
@@ -347,7 +399,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         },
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -367,7 +419,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         },
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
 
@@ -387,7 +439,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         },
                       })
                     }
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
               </div>
@@ -396,7 +448,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
 
           {/* Branches Section */}
           <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]">
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]/70">
               <div className="flex items-center gap-2">
                 <MapPin className="h-4 w-4 text-[#3E92CC]" />
                 <h2 className="text-sm font-semibold text-slate-900">
@@ -416,7 +468,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
             {showNewBranch && (
               <form
                 onSubmit={handleCreateBranch}
-                className="rounded-lg bg-slate-50 border border-slate-200 p-4 space-y-3"
+                className="rounded-2xl bg-[#F4F6FB] border border-[#D8E4EC] p-4 space-y-3"
               >
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <input
@@ -425,49 +477,49 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                     value={bName}
                     onChange={(e) => setBName(e.target.value)}
                     placeholder="Nombre sucursal (Ej: Sucursal Viña) *"
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                   <input
                     type="text"
                     value={bCode}
                     onChange={(e) => setBCode(e.target.value)}
                     placeholder="Código (Ej: SUC-VNA)"
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                   <input
                     type="text"
                     value={bCity}
                     onChange={(e) => setBCity(e.target.value)}
                     placeholder="Ciudad"
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                   <input
                     type="text"
                     value={bAddress}
                     onChange={(e) => setBAddress(e.target.value)}
                     placeholder="Dirección comercial"
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                   <input
                     type="text"
                     value={bPhone}
                     onChange={(e) => setBPhone(e.target.value)}
                     placeholder="Teléfono"
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-mono"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                   <input
                     type="text"
                     value={bHours}
                     onChange={(e) => setBHours(e.target.value)}
                     placeholder="Horario atención"
-                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
                     onClick={() => setShowNewBranch(false)}
-                    className="rounded-xl border border-[#D8E4EC] bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-[#F4F6FB]"
+                    className="rounded-xl border border-[#D8E4EC] bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-[#F4F6FB] transition-colors"
                   >
                     Cancelar
                   </button>
@@ -485,18 +537,24 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
               {tenantBranches.map((b) => (
                 <div
                   key={b.id}
-                  className="rounded-lg border border-slate-200 bg-slate-50/70 p-4 space-y-1.5 flex flex-col justify-between"
+                  className="rounded-2xl border border-[#D8E4EC]/70 bg-[#F4F6FB]/60 p-4 space-y-2 flex flex-col justify-between"
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between gap-2">
-                      <span className="font-mono text-xs font-bold text-blue-700">
+                      <span className="font-mono text-xs font-bold text-[#0A2463]">
                         {b.code}
                       </span>
-                      <span className="text-[11px] font-semibold text-slate-600">
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${
+                          b.is_hq
+                            ? 'bg-[#EBF4FA] text-[#3E92CC] border border-[#3E92CC]/25'
+                            : 'bg-white text-slate-600 border border-[#D8E4EC]'
+                        }`}
+                      >
                         {b.is_hq ? 'Casa Matriz [HQ]' : 'Sucursal'}
                       </span>
                     </div>
-                    <div className="text-sm font-bold text-slate-900">{b.name}</div>
+                    <div className="text-sm font-semibold text-slate-900">{b.name}</div>
                     <div className="text-xs text-slate-600">
                       {b.address} · {b.city}
                     </div>
@@ -505,7 +563,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   </div>
 
                   {!b.is_hq && perms.canDeleteBranch && (
-                    <div className="pt-2 mt-2 border-t border-slate-200 flex justify-end">
+                    <div className="pt-2.5 mt-2 border-t border-[#D8E4EC]/70 flex justify-end">
                       {confirmDeleteBranchId === b.id ? (
                         <div className="flex items-center gap-2">
                           <button
@@ -521,7 +579,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                               onDeleteBranch(b.id);
                               setConfirmDeleteBranchId(null);
                             }}
-                            className="rounded bg-red-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700"
+                            className="rounded-lg bg-[#D64545] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-red-700 transition-colors"
                           >
                             Confirmar
                           </button>
@@ -530,7 +588,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setConfirmDeleteBranchId(b.id)}
-                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-red-600 hover:underline"
+                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#D64545] hover:underline"
                         >
                           <Trash2 className="h-3 w-3" />
                           <span>Eliminar Sucursal</span>
@@ -544,75 +602,122 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
           </section>
         </>
       ) : (
-        /* Users & Roles Tab */
+        /* Gestión de Usuarios de FIXICLOUD (public.app_users) */
         <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]/70">
             <div>
               <h2 className="text-sm font-semibold text-slate-900">
-                Usuarios y Roles del Taller ({tenantProfiles.length})
+                Gestión de Usuarios de FIXICLOUD ({visibleAppUsers.length})
               </h2>
               <p className="text-xs text-slate-500">
-                Asigna técnicos, recepcionistas y administradores a Casa Matriz (acceso total) o a una sucursal específica.
+                Crea y administra cuentas directas en <span className="font-mono">public.app_users</span> con acceso por usuario y PIN/contraseña.
               </p>
             </div>
             {perms.canManageUsers && (
               <button
                 type="button"
-                onClick={() => setShowNewUser((v) => !v)}
+                onClick={() => {
+                  setUserError(null);
+                  setShowNewUser((v) => !v);
+                }}
                 className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
               >
                 <Plus className="h-3.5 w-3.5" />
-                <span>Agregar Usuario / Técnico</span>
+                <span>Nuevo Usuario</span>
               </button>
             )}
           </div>
+
+          {userError && (
+            <AlertBanner
+              variant="error"
+              message={userError}
+              onDismiss={() => setUserError(null)}
+            />
+          )}
 
           {showNewUser && perms.canManageUsers && (
             <form
               onSubmit={handleCreateUser}
               className="rounded-2xl bg-[#F4F6FB] border border-[#D8E4EC] p-4 space-y-3"
             >
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                <input
-                  type="text"
-                  required
-                  value={uName}
-                  onChange={(e) => setUName(e.target.value)}
-                  placeholder="Nombre completo *"
-                  className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                />
-                <input
-                  type="email"
-                  required
-                  value={uEmail}
-                  onChange={(e) => setUEmail(e.target.value)}
-                  placeholder="correo@taller.cl *"
-                  className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                />
-                <select
-                  value={uRole}
-                  onChange={(e) => setURole(e.target.value as RoleType)}
-                  className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                >
-                  <option value="technician">Técnico</option>
-                  <option value="receptionist">Recepcionista</option>
-                  <option value="admin">Admin de Taller</option>
-                  {activeRole === 'superadmin' && (
-                    <option value="superadmin">SuperAdmin Global</option>
-                  )}
-                </select>
-                <select
-                  value={uBranchId}
-                  onChange={(e) => setUBranchId(e.target.value)}
-                  className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                >
-                  <option value="">Casa Matriz (Todas las Sucursales)</option>
-                  {tenantBranches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.code})
-                    </option>
-                  ))}
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Nombre completo *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={uFullName}
+                    onChange={(e) => setUFullName(e.target.value)}
+                    placeholder="Ej: Martín Soto"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Usuario (username) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={uUsername}
+                    onChange={(e) => setUUsername(e.target.value)}
+                    placeholder="Ej: msoto"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Contraseña / PIN *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={uPinOrPassword}
+                    onChange={(e) => setUPinOrPassword(e.target.value)}
+                    placeholder="Ej: 1234"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Rol Operativo
+                  </label>
+                  <select
+                    aria-label="Rol del nuevo usuario"
+                    value={uRole}
+                    onChange={(e) => setURole(e.target.value as RoleType)}
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                  >
+                    <option value="technician">technician (Técnico)</option>
+                    <option value="receptionist">receptionist (Recepcionista)</option>
+                    <option value="admin">company_admin (Admin de Taller)</option>
+                    {activeRole === 'superadmin' && (
+                      <option value="superadmin">superadmin (Global)</option>
+                    )}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Sucursal Asignada
+                  </label>
+                  <select
+                    aria-label="Sucursal del nuevo usuario"
+                    value={uBranchId}
+                    disabled={uRole === 'superadmin'}
+                    onChange={(e) => setUBranchId(e.target.value)}
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 disabled:bg-slate-100 focus:border-[#3E92CC] focus:outline-none"
+                  >
+                    <option value="">Global (Casa Matriz / Todas)</option>
+                    {tenantBranches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.code})
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
               <div className="flex justify-end gap-2">
                 <button
@@ -624,72 +729,86 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white transition-colors"
+                  disabled={savingUser}
+                  className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 px-4 py-2 text-xs font-semibold text-white transition-colors"
                 >
-                  Guardar Usuario
+                  {savingUser ? 'Guardando...' : 'Guardar en app_users'}
                 </button>
               </div>
             </form>
           )}
 
-          <div className="overflow-x-auto rounded-2xl border border-[#D8E4EC]">
+          <div className="overflow-x-auto rounded-2xl border border-[#D8E4EC]/70">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-[#F4F6FB] border-b border-[#D8E4EC] text-[11px] font-semibold text-slate-600">
+                <tr className="bg-[#F4F6FB]/70 border-b border-[#D8E4EC]/70 text-[11px] font-semibold text-slate-500">
                   <th className="py-3 px-4">Nombre</th>
-                  <th className="py-3 px-4">Correo Electrónico</th>
+                  <th className="py-3 px-4">Usuario</th>
+                  <th className="py-3 px-4">PIN / Clave</th>
                   <th className="py-3 px-4">Rol Operativo</th>
                   <th className="py-3 px-4">Sucursal Asignada</th>
                   <th className="py-3 px-4 text-center">Estado</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
-                {tenantProfiles.map((prof) => (
-                  <tr key={prof.id} className="hover:bg-slate-50/70">
-                    <td className="py-2.5 px-4 font-semibold text-slate-900">
-                      {prof.full_name}
+              <tbody className="divide-y divide-[#D8E4EC]/50">
+                {visibleAppUsers.map((usr) => (
+                  <tr key={usr.id} className="hover:bg-[#F4F6FB]/70 transition-colors">
+                    <td className="py-3 px-4 font-semibold text-slate-900">
+                      {usr.full_name}
                     </td>
-                    <td className="py-2.5 px-4 font-mono text-slate-600">
-                      {prof.email}
+                    <td className="py-3 px-4 font-mono text-[#0A2463] font-semibold">
+                      @{usr.username}
                     </td>
-                    <td className="py-2.5 px-4">
+                    <td className="py-3 px-4 font-mono text-slate-600">
+                      <span className="inline-flex items-center gap-1 rounded-lg bg-[#F4F6FB] border border-[#D8E4EC] px-2 py-0.5 text-[11px]">
+                        <KeyRound className="h-3 w-3 text-[#3E92CC]" />
+                        <span>{usr.pin_or_password}</span>
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
                       {perms.canManageUsers ? (
                         <select
-                          aria-label={`Rol de ${prof.full_name}`}
-                          value={prof.role}
+                          aria-label={`Rol de ${usr.full_name}`}
+                          value={usr.role}
                           onChange={(e) =>
-                            onUpdateProfile({
-                              ...prof,
+                            void handleUpdateUser({
+                              ...usr,
                               role: e.target.value as RoleType,
                             })
                           }
-                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                          className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/60 px-2.5 py-1 text-xs text-slate-800 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                         >
-                          <option value="technician">Técnico</option>
-                          <option value="receptionist">Recepcionista</option>
-                          <option value="admin">Admin de Taller</option>
+                          <option value="technician">technician</option>
+                          <option value="receptionist">receptionist</option>
+                          <option value="admin">company_admin</option>
                           {activeRole === 'superadmin' && (
-                            <option value="superadmin">SuperAdmin Global</option>
+                            <option value="superadmin">superadmin</option>
                           )}
                         </select>
                       ) : (
-                        <span className="font-medium text-slate-700">{prof.role}</span>
+                        <span className="font-medium text-slate-700">
+                          {usr.role === 'admin' ? 'company_admin' : usr.role}
+                        </span>
                       )}
                     </td>
-                    <td className="py-2.5 px-4">
-                      {perms.canManageUsers ? (
+                    <td className="py-3 px-4">
+                      {usr.role === 'superadmin' || usr.tenant_id === null ? (
+                        <span className="text-[11px] font-semibold text-[#0A2463]">
+                          Global Multiempresa (null)
+                        </span>
+                      ) : perms.canManageUsers ? (
                         <select
-                          aria-label={`Sucursal de ${prof.full_name}`}
-                          value={prof.branch_id ?? ''}
+                          aria-label={`Sucursal de ${usr.full_name}`}
+                          value={usr.branch_id ?? ''}
                           onChange={(e) =>
-                            onUpdateProfile({
-                              ...prof,
+                            void handleUpdateUser({
+                              ...usr,
                               branch_id: e.target.value ? e.target.value : null,
                             })
                           }
-                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs"
+                          className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/60 px-2.5 py-1 text-xs text-slate-800 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                         >
-                          <option value="">Casa Matriz (Todas)</option>
+                          <option value="">Global empresa (Todas)</option>
                           {tenantBranches.map((b) => (
                             <option key={b.id} value={b.id}>
                               {b.name}
@@ -698,26 +817,29 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         </select>
                       ) : (
                         <span>
-                          {prof.branch_id
-                            ? branchMap.get(prof.branch_id)?.name ?? 'Sucursal'
-                            : 'Casa Matriz (Todas)'}
+                          {usr.branch_id
+                            ? branchMap.get(usr.branch_id)?.name ?? 'Sucursal'
+                            : 'Global empresa (Todas)'}
                         </span>
                       )}
                     </td>
-                    <td className="py-2.5 px-4 text-center">
+                    <td className="py-3 px-4 text-center">
                       <button
                         type="button"
                         disabled={!perms.canManageUsers}
                         onClick={() =>
-                          onUpdateProfile({ ...prof, active: !prof.active })
+                          void handleUpdateUser({
+                            ...usr,
+                            is_active: !usr.is_active,
+                          })
                         }
-                        className={`rounded-md border px-2.5 py-1 text-[11px] font-semibold ${
-                          prof.active
-                            ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                            : 'bg-slate-100 border-slate-300 text-slate-500'
+                        className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
+                          usr.is_active
+                            ? 'bg-[#EBF8F6] border-[#1B998B]/30 text-[#1B998B]'
+                            : 'bg-[#F4F6FB] border-[#D8E4EC] text-slate-500'
                         }`}
                       >
-                        {prof.active ? 'Activo' : 'Inactivo'}
+                        {usr.is_active ? 'Activo' : 'Inactivo'}
                       </button>
                     </td>
                   </tr>
@@ -728,15 +850,15 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
         </section>
       )}
 
-      {invitedUserInfo && (
+      {createdUserInfo && (
         <ConfirmSuccessModal
-          title="¡Usuario agregado!"
-          description={`El perfil de ${invitedUserInfo.name} (${invitedUserInfo.email}) ha sido habilitado en el equipo de ${tenant.name}.`}
+          title="¡Usuario creado en FIXICLOUD!"
+          description={`El usuario @${createdUserInfo.username} (${createdUserInfo.fullName}) ya puede iniciar sesión directamente sin Supabase Auth.`}
           secondaryLabel="Cerrar"
-          primaryLabel="Agregar otro"
-          onSecondary={() => setInvitedUserInfo(null)}
+          primaryLabel="Crear otro usuario"
+          onSecondary={() => setCreatedUserInfo(null)}
           onPrimary={() => {
-            setInvitedUserInfo(null);
+            setCreatedUserInfo(null);
             setShowNewUser(true);
           }}
         />

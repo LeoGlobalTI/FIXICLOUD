@@ -227,14 +227,30 @@ export interface TeamProfile {
   created_at: string;
 }
 
+export interface AppUser {
+  id: string;
+  tenant_id: string | null;
+  branch_id: string | null; // null = global de la empresa (Casa Matriz)
+  username: string;
+  pin_or_password: string;
+  full_name: string;
+  role: RoleType;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface AuthSessionUser {
   id: string;
-  email: string;
+  username: string;
+  email?: string;
   full_name: string;
-  tenant_id: string;
+  tenant_id: string | null;
   branch_id: string | null;
   role: RoleType;
+  is_active: boolean;
   mode: 'supabase' | 'demo';
+  tenant?: Tenant | null;
+  branch?: Branch | null;
 }
 
 export interface SupabaseConfig {
@@ -251,6 +267,7 @@ export interface ErpState {
   tenants: Tenant[];
   branches: Branch[];
   profiles: TeamProfile[];
+  appUsers: AppUser[];
   clients: Client[];
   assets: CustomerAsset[];
   catalogItems: CatalogItem[];

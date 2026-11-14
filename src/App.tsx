@@ -11,6 +11,7 @@ import { ContextHeader } from './components/ContextHeader';
 import { DashboardView } from './components/DashboardView';
 import { InventoryLoansView } from './components/InventoryLoansView';
 import { LegacyMigratorView } from './components/LegacyMigratorView';
+import { LoginScreen } from './components/LoginScreen';
 import { NewOrderModal, type NewOrderPrefill } from './components/NewOrderModal';
 import { NewTenantModal } from './components/NewTenantModal';
 import { OrderConsoleView } from './components/OrderConsoleView';
@@ -35,18 +36,18 @@ import {
   deleteOrderPhotoFromSupabase,
   isSupabaseLive,
   pullSupabaseErpState,
-  signOutFromSupabase,
+  syncAppUserToSupabase,
   syncAppointmentToSupabase,
   syncAssetToSupabase,
   syncBranchToSupabase,
   syncCatalogItemToSupabase,
   syncClientToSupabase,
   syncLoanAssetToSupabase,
-  syncProfileToSupabase,
   syncTenantToSupabase,
   syncWorkOrderToSupabase,
 } from './services/supabaseService';
 import type {
+  AppUser,
   Appointment,
   AuthSessionUser,
   Branch,
@@ -59,11 +60,11 @@ import type {
   NavSection,
   RoleType,
   SupabaseConfig,
-  TeamProfile,
   Tenant,
   WorkOrder,
 } from './types/erp';
 import { getRolePermissions } from './utils/erpLogic';
+import { generateUUID } from './utils/uuid';
 
 function getInitialTrackFromUrl(): { isTrack: boolean; code: string } {
   if (typeof window === 'undefined') return { isTrack: false, code: '8F92A1C4' };
@@ -93,7 +94,7 @@ export default function App() {
   const [activeTenantId, setActiveTenantId] = useState<string>(() => {
     const sess = loadAuthSession();
     if (sess?.tenant_id) return sess.tenant_id;
-    return loadErpState().tenants[0]?.id ?? 'tenant-globaltech';
+    return loadErpState().tenants[0]?.id ?? '11111111-1111-4111-8111-111111111111';
   });
   const [activeBranchId, setActiveBranchId] = useState<string>(() => {
     const sess = loadAuthSession();
@@ -148,6 +149,20 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Enforce tenant_id, branch_id, and role scoping from logged-in app_users session
+  useEffect(() => {
+    if (!authSession) return;
+    setActiveRole(authSession.role);
+    if (authSession.role !== 'superadmin') {
+      if (authSession.tenant_id) {
+        setActiveTenantId(authSession.tenant_id);
+      }
+      if (authSession.branch_id) {
+        setActiveBranchId(authSession.branch_id);
+      }
+    }
+  }, [authSession]);
 
   // Guard restricted sections when activeRole switches to receptionist or technician
   useEffect(() => {
@@ -243,8 +258,8 @@ export default function App() {
     sector: IndustrySector;
     city: string;
   }) => {
-    const tenantId = `tenant-${Date.now()}`;
-    const branchId = `branch-${Date.now()}`;
+    const tenantId = generateUUID();
+    const branchId = generateUUID();
     const newTenant: Tenant = {
       id: tenantId,
       name: input.name,
@@ -314,20 +329,28 @@ export default function App() {
     void deleteBranchFromSupabase(supabaseConfig, branchId);
   };
 
-  const handleAddProfile = (profile: TeamProfile) => {
+  const handleAddAppUser = async (
+    user: AppUser
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await syncAppUserToSupabase(supabaseConfig, user);
+    if (!res.ok) return res;
     setErpState((prev) => ({
       ...prev,
-      profiles: [profile, ...prev.profiles],
+      appUsers: [user, ...prev.appUsers],
     }));
-    void syncProfileToSupabase(supabaseConfig, profile);
+    return { ok: true };
   };
 
-  const handleUpdateProfile = (updated: TeamProfile) => {
+  const handleUpdateAppUser = async (
+    updated: AppUser
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await syncAppUserToSupabase(supabaseConfig, updated);
+    if (!res.ok) return res;
     setErpState((prev) => ({
       ...prev,
-      profiles: prev.profiles.map((p) => (p.id === updated.id ? updated : p)),
+      appUsers: prev.appUsers.map((u) => (u.id === updated.id ? updated : u)),
     }));
-    void syncProfileToSupabase(supabaseConfig, updated);
+    return { ok: true };
   };
 
   const handleUpdateOrder = (updated: WorkOrder) => {
@@ -335,7 +358,8 @@ export default function App() {
       ...prev,
       workOrders: prev.workOrders.map((o) => (o.id === updated.id ? updated : o)),
     }));
-    void syncWorkOrderToSupabase(supabaseConfig, updated);
+    const orderTenant = erpState.tenants.find((t) => t.id === updated.tenant_id);
+    void syncWorkOrderToSupabase(supabaseConfig, updated, orderTenant?.iva_rate ?? 19);
   };
 
   const handleCreateOrder = (payload: {
@@ -359,7 +383,8 @@ export default function App() {
     }));
     if (payload.newClient) void syncClientToSupabase(supabaseConfig, payload.newClient);
     if (payload.newAsset) void syncAssetToSupabase(supabaseConfig, payload.newAsset);
-    void syncWorkOrderToSupabase(supabaseConfig, payload.order);
+    const orderTenant = erpState.tenants.find((t) => t.id === payload.order.tenant_id);
+    void syncWorkOrderToSupabase(supabaseConfig, payload.order, orderTenant?.iva_rate ?? 19);
     if (payload.sourceAppointmentId) {
       const src = erpState.appointments.find((a) => a.id === payload.sourceAppointmentId);
       if (src) {
@@ -486,7 +511,7 @@ export default function App() {
     if (!asset) return;
     const now = new Date().toISOString();
     const newLoan = {
-      id: `wl-${Date.now()}`,
+      id: generateUUID(),
       loan_asset_id: asset.id,
       asset_code: asset.code,
       asset_name: asset.name,
@@ -495,12 +520,17 @@ export default function App() {
     };
     const targetOrder = erpState.workOrders.find((o) => o.id === orderId);
     if (targetOrder) {
+      const orderTenant = erpState.tenants.find((t) => t.id === targetOrder.tenant_id);
       void syncLoanAssetToSupabase(supabaseConfig, { ...asset, status: 'loaned' });
-      void syncWorkOrderToSupabase(supabaseConfig, {
-        ...targetOrder,
-        updated_at: now,
-        loan: newLoan,
-      });
+      void syncWorkOrderToSupabase(
+        supabaseConfig,
+        {
+          ...targetOrder,
+          updated_at: now,
+          loan: newLoan,
+        },
+        orderTenant?.iva_rate ?? 19
+      );
     }
     setErpState((prev) => ({
       ...prev,
@@ -555,6 +585,7 @@ export default function App() {
       tenants: partial.tenants?.length ? partial.tenants : prev.tenants,
       branches: partial.branches?.length ? partial.branches : prev.branches,
       profiles: partial.profiles?.length ? partial.profiles : prev.profiles,
+      appUsers: partial.appUsers?.length ? partial.appUsers : prev.appUsers,
       clients: partial.clients?.length ? partial.clients : prev.clients,
       assets: partial.assets?.length ? partial.assets : prev.assets,
       catalogItems: partial.catalogItems?.length
@@ -567,6 +598,54 @@ export default function App() {
         : prev.appointments,
     }));
   };
+
+  if (!authSession) {
+    return (
+      <>
+        <LoginScreen
+          supabaseConfig={supabaseConfig}
+          appUsers={erpState.appUsers}
+          tenants={erpState.tenants}
+          branches={erpState.branches}
+          onAuthSuccess={(user: AuthSessionUser) => {
+            setErpState((prev) => ({
+              ...prev,
+              tenants:
+                user.tenant && !prev.tenants.some((t) => t.id === user.tenant!.id)
+                  ? [...prev.tenants, user.tenant]
+                  : prev.tenants,
+              branches:
+                user.branch && !prev.branches.some((b) => b.id === user.branch!.id)
+                  ? [...prev.branches, user.branch]
+                  : prev.branches,
+            }));
+            setAuthSession(user);
+            if (user.tenant_id) setActiveTenantId(user.tenant_id);
+            setActiveBranchId(user.branch_id ?? 'ALL');
+            setActiveRole(user.role);
+            setSelectedOrderId(null);
+          }}
+          onOpenSupabaseModal={() => setShowSupabaseModal(true)}
+        />
+
+        {showSupabaseModal && (
+          <SupabaseModal
+            config={supabaseConfig}
+            onSaveConfig={setSupabaseConfig}
+            onSyncFromSupabase={handleSyncFromSupabase}
+            onResetDemoData={() => {
+              const fresh = resetErpState();
+              setErpState(fresh);
+              setActiveTenantId(fresh.tenants[0].id);
+              setActiveBranchId('ALL');
+              setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
+            }}
+            onClose={() => setShowSupabaseModal(false)}
+          />
+        )}
+      </>
+    );
+  }
 
   if (activeSection === 'track') {
     return (
@@ -641,7 +720,8 @@ export default function App() {
           onOpenAuthModal={() => setShowAuthModal(true)}
           onSignOut={() => {
             setAuthSession(null);
-            void signOutFromSupabase(supabaseConfig);
+            setActiveRole('admin');
+            setActiveBranchId('ALL');
           }}
           openOrdersCount={openOrdersCount}
           todayAppointmentsCount={scheduledAppointmentsCount}
@@ -665,6 +745,8 @@ export default function App() {
           }}
           supabaseConfig={supabaseConfig}
           onOpenSupabaseModal={() => setShowSupabaseModal(true)}
+          authSession={authSession}
+          onOpenAuthModal={() => setShowAuthModal(true)}
           lowStockItems={lowStockItems}
           readyOrders={readyOrders}
           scheduledAppointments={scheduledAppointments}
@@ -675,7 +757,7 @@ export default function App() {
           onOpenMobileMenu={() => setMobileMenuOpen(true)}
         />
 
-        <main className="flex-1 p-4 lg:p-6 max-w-[1600px] w-full mx-auto">
+        <main className="flex-1 min-w-0 p-4 lg:p-6 max-w-[1600px] w-full mx-auto">
           {activeSection === 'dashboard' && (
             <DashboardView
               tenant={activeTenant}
@@ -807,14 +889,14 @@ export default function App() {
             <SettingsBranchesView
               tenant={activeTenant}
               branches={erpState.branches}
-              profiles={erpState.profiles}
+              appUsers={erpState.appUsers}
               activeRole={activeRole}
               initialTab={settingsInitialTab}
               onUpdateTenant={handleUpdateTenant}
               onAddBranch={handleAddBranch}
               onDeleteBranch={handleDeleteBranch}
-              onAddProfile={handleAddProfile}
-              onUpdateProfile={handleUpdateProfile}
+              onAddAppUser={handleAddAppUser}
+              onUpdateAppUser={handleUpdateAppUser}
             />
           )}
 
@@ -873,14 +955,20 @@ export default function App() {
       {showAuthModal && (
         <AuthModal
           supabaseConfig={supabaseConfig}
-          profiles={erpState.profiles}
+          appUsers={erpState.appUsers}
           tenants={erpState.tenants}
-          onAuthSuccess={({ user, newTenant, newBranch, newProfile }) => {
+          branches={erpState.branches}
+          onAuthSuccess={(user) => {
             setErpState((prev) => ({
               ...prev,
-              tenants: newTenant ? [...prev.tenants, newTenant] : prev.tenants,
-              branches: newBranch ? [...prev.branches, newBranch] : prev.branches,
-              profiles: newProfile ? [newProfile, ...prev.profiles] : prev.profiles,
+              tenants:
+                user.tenant && !prev.tenants.some((t) => t.id === user.tenant!.id)
+                  ? [...prev.tenants, user.tenant]
+                  : prev.tenants,
+              branches:
+                user.branch && !prev.branches.some((b) => b.id === user.branch!.id)
+                  ? [...prev.branches, user.branch]
+                  : prev.branches,
             }));
             setAuthSession(user);
             if (user.tenant_id) setActiveTenantId(user.tenant_id);

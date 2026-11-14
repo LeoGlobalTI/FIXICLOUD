@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type {
+  AppUser,
   Appointment,
   AuthSessionUser,
   Branch,
@@ -7,10 +8,8 @@ import type {
   Client,
   CustomerAsset,
   ErpState,
-  IndustrySector,
   LoanAsset,
   PhotoStage,
-  RoleType,
   SupabaseConfig,
   TeamProfile,
   Tenant,
@@ -21,11 +20,44 @@ import type {
   WorkOrderPhoto,
 } from '../types/erp';
 import { SEED_ERP_STATE } from '../data/seedData';
-import { mapDbRoleToRoleType, mapRoleTypeToDbRole } from '../utils/erpLogic';
+import { mapDbRoleToRoleType } from '../utils/erpLogic';
+import {
+  mapAppUserFromDb,
+  mapAppUserToDb,
+  mapAppointmentFromDb,
+  mapAppointmentToDb,
+  mapAssetFromDb,
+  mapAssetToDb,
+  mapBranchFromDb,
+  mapBranchToDb,
+  mapBranchesToDbSafe,
+  mapCatalogItemFromDb,
+  mapCatalogItemToDb,
+  mapClientFromDb,
+  mapClientToDb,
+  mapLoanAssetFromDb,
+  mapLoanAssetToDb,
+  mapOrderItemFromDb,
+  mapOrderLoanFromDb,
+  mapOrderPaymentFromDb,
+  mapOrderPhotoFromDb,
+  mapProfileFromDb,
+  mapProfileToDb,
+  mapTenantFromDb,
+  mapTenantToDb,
+  mapWorkOrderFromDb,
+  mapWorkOrderItemToDb,
+  mapWorkOrderLoanToDb,
+  mapWorkOrderPaymentToDb,
+  mapWorkOrderPhotoToDb,
+  mapWorkOrderToDb,
+} from '../utils/supabaseMappers';
+import { ensureUUID } from '../utils/uuid';
 
 export const SUPABASE_TABLES = [
   'tenants',
   'branches',
+  'app_users',
   'profiles',
   'clients',
   'customer_assets',
@@ -74,6 +106,19 @@ function normalizeUrl(url: string): string {
   return url.trim().replace(/\/+$/, '');
 }
 
+function formatPgError(
+  table: string,
+  err: { message?: string; details?: string | null; hint?: string | null; code?: string | null }
+): string {
+  const parts = [
+    `Error en tabla public.${table}: ${err.message ?? 'Bad Request'}`,
+    err.code ? `[${err.code}]` : '',
+    err.details ? `Detalle: ${err.details}` : '',
+    err.hint ? `Sugerencia: ${err.hint}` : '',
+  ].filter(Boolean);
+  return parts.join(' · ');
+}
+
 export function getSupabaseClient(url: string, anonKey: string): SupabaseClient | null {
   const cleanUrl = normalizeUrl(url);
   const cleanKey = anonKey.trim();
@@ -85,8 +130,8 @@ export function getSupabaseClient(url: string, anonKey: string): SupabaseClient 
   cachedClientKey = key;
   cachedClient = createClient(cleanUrl, cleanKey, {
     auth: {
-      persistSession: true,
-      autoRefreshToken: true,
+      persistSession: false,
+      autoRefreshToken: false,
     },
   });
   return cachedClient;
@@ -128,7 +173,7 @@ export async function testSupabaseConnection(
             table,
             ok: false,
             count: 0,
-            error: `HTTP ${res.status}: ${text.slice(0, 120)}`,
+            error: `HTTP ${res.status}: ${text.slice(0, 140)}`,
           });
           continue;
         }
@@ -214,7 +259,7 @@ export async function runProductionHealthCheck(
   }
 
   const items: HealthCheckItem[] = [];
-  const checkTables = ['tenants', 'branches', 'profiles', 'work_orders', 'catalog_items', 'appointments'] as const;
+  const checkTables = ['tenants', 'branches', 'app_users', 'work_orders', 'catalog_items', 'appointments'] as const;
 
   for (const tbl of checkTables) {
     const { error, count } = await client
@@ -271,6 +316,7 @@ export async function pullSupabaseErpState(
     const [
       tenantsRes,
       branchesRes,
+      appUsersRes,
       profilesRes,
       clientsRes,
       assetsRes,
@@ -285,17 +331,18 @@ export async function pullSupabaseErpState(
     ] = await Promise.all([
       client.from('tenants').select('*'),
       client.from('branches').select('*'),
+      client.from('app_users').select('*'),
       client.from('profiles').select('*'),
       client.from('clients').select('*'),
       client.from('customer_assets').select('*'),
       client.from('catalog_items').select('*'),
       client.from('loan_assets').select('*'),
-      client.from('work_orders').select('*').order('created_at', { ascending: false }),
+      client.from('work_orders').select('*').order('received_at', { ascending: false }),
       client.from('work_order_items').select('*'),
       client.from('work_order_photos').select('*'),
       client.from('work_order_loans').select('*'),
       client.from('work_order_payments').select('*'),
-      client.from('appointments').select('*').order('date', { ascending: true }),
+      client.from('appointments').select('*').order('scheduled_start', { ascending: true }),
     ]);
 
     if (tenantsRes.error || ordersRes.error) {
@@ -308,100 +355,101 @@ export async function pullSupabaseErpState(
       };
     }
 
-    const rawItems = (itemsRes.data ?? []) as Array<WorkOrderItem & { work_order_id?: string }>;
-    const rawPhotos = (photosRes.data ?? []) as Array<WorkOrderPhoto & { work_order_id?: string }>;
-    const rawOrderLoans = (orderLoansRes.data ?? []) as Array<WorkOrderLoan & { work_order_id?: string }>;
-    const rawPayments = (paymentsRes.data ?? []) as Array<WorkOrderPayment & { work_order_id?: string }>;
+    const rawItems = (itemsRes.data ?? []) as Array<Record<string, unknown>>;
+    const rawPhotos = (photosRes.data ?? []) as Array<Record<string, unknown>>;
+    const rawOrderLoans = (orderLoansRes.data ?? []) as Array<Record<string, unknown>>;
+    const rawPayments = (paymentsRes.data ?? []) as Array<Record<string, unknown>>;
 
     const itemsByOrder = new Map<string, WorkOrderItem[]>();
     for (const row of rawItems) {
-      if (!row.work_order_id) continue;
-      const list = itemsByOrder.get(row.work_order_id) ?? [];
-      list.push({
-        id: row.id,
-        source: row.source,
-        catalog_item_id: row.catalog_item_id,
-        sku: row.sku,
-        description: row.description,
-        qty: Number(row.qty) || 1,
-        unit_price: Number(row.unit_price) || 0,
-      });
-      itemsByOrder.set(row.work_order_id, list);
+      const woId = row.work_order_id ? String(row.work_order_id) : '';
+      if (!woId) continue;
+      const list = itemsByOrder.get(woId) ?? [];
+      list.push(mapOrderItemFromDb(row));
+      itemsByOrder.set(woId, list);
     }
 
     const photosByOrder = new Map<string, WorkOrderPhoto[]>();
     for (const row of rawPhotos) {
-      if (!row.work_order_id) continue;
-      const list = photosByOrder.get(row.work_order_id) ?? [];
-      list.push({
-        id: row.id,
-        url: row.url,
-        stage: row.stage,
-        caption: row.caption ?? '',
-        created_at: row.created_at,
-      });
-      photosByOrder.set(row.work_order_id, list);
+      const woId = row.work_order_id ? String(row.work_order_id) : '';
+      if (!woId) continue;
+      const list = photosByOrder.get(woId) ?? [];
+      list.push(mapOrderPhotoFromDb(row));
+      photosByOrder.set(woId, list);
     }
 
     const paymentsByOrder = new Map<string, WorkOrderPayment[]>();
     for (const row of rawPayments) {
-      if (!row.work_order_id) continue;
-      const list = paymentsByOrder.get(row.work_order_id) ?? [];
-      list.push({
-        id: row.id,
-        date: row.date,
-        amount: Number(row.amount) || 0,
-        method: row.method,
-        reference: row.reference,
-      });
-      paymentsByOrder.set(row.work_order_id, list);
+      const woId = row.work_order_id ? String(row.work_order_id) : '';
+      if (!woId) continue;
+      const list = paymentsByOrder.get(woId) ?? [];
+      list.push(mapOrderPaymentFromDb(row));
+      paymentsByOrder.set(woId, list);
     }
+
+    const loanAssets: LoanAsset[] = (loansRes.data ?? []).map((l) =>
+      mapLoanAssetFromDb(l as Record<string, unknown>)
+    );
+    const loanAssetLookupMap = new Map(
+      loanAssets.map((la) => [la.id, { code: la.code, name: la.name }])
+    );
 
     const loanByOrder = new Map<string, WorkOrderLoan>();
     for (const row of rawOrderLoans) {
-      if (!row.work_order_id) continue;
-      loanByOrder.set(row.work_order_id, {
-        id: row.id,
-        loan_asset_id: row.loan_asset_id,
-        asset_code: row.asset_code,
-        asset_name: row.asset_name,
-        loaned_at: row.loaned_at,
-        returned_at: row.returned_at,
-        delivery_notes: row.delivery_notes ?? '',
-      });
+      const woId = row.work_order_id ? String(row.work_order_id) : '';
+      if (!woId) continue;
+      const laId = row.loan_asset_id ? String(row.loan_asset_id) : '';
+      loanByOrder.set(woId, mapOrderLoanFromDb(row, loanAssetLookupMap.get(laId)));
     }
 
+    const tenants: Tenant[] = (tenantsRes.data ?? []).map((t) =>
+      mapTenantFromDb(t as Record<string, unknown>)
+    );
+    const branches: Branch[] = (branchesRes.data ?? []).map((b) =>
+      mapBranchFromDb(b as Record<string, unknown>)
+    );
+    const appUsers: AppUser[] = (appUsersRes.data ?? []).map((u) =>
+      mapAppUserFromDb(u as Record<string, unknown>)
+    );
+    const profiles: TeamProfile[] = (profilesRes.data ?? []).map((p) =>
+      mapProfileFromDb(p as Record<string, unknown>)
+    );
+    const clients: Client[] = (clientsRes.data ?? []).map((c) =>
+      mapClientFromDb(c as Record<string, unknown>)
+    );
+    const assets: CustomerAsset[] = (assetsRes.data ?? []).map((a) =>
+      mapAssetFromDb(a as Record<string, unknown>)
+    );
+    const catalogItems: CatalogItem[] = (catalogRes.data ?? []).map((c) =>
+      mapCatalogItemFromDb(c as Record<string, unknown>)
+    );
     const workOrders: WorkOrder[] = (ordersRes.data ?? []).map((row) => {
-      const r = row as WorkOrder;
-      return {
-        ...r,
-        items: itemsByOrder.get(r.id) ?? r.items ?? [],
-        photos: photosByOrder.get(r.id) ?? r.photos ?? [],
-        payments: paymentsByOrder.get(r.id) ?? r.payments ?? [],
-        loan: loanByOrder.get(r.id) ?? r.loan ?? undefined,
-      };
+      const r = row as Record<string, unknown>;
+      const id = String(r.id);
+      return mapWorkOrderFromDb(r, {
+        items: itemsByOrder.get(id),
+        photos: photosByOrder.get(id),
+        payments: paymentsByOrder.get(id),
+        loan: loanByOrder.get(id),
+      });
     });
-
-    const profiles: TeamProfile[] = (profilesRes.data ?? []).map((p) => {
-      const row = p as TeamProfile & { role: string };
-      return {
-        ...row,
-        role: mapDbRoleToRoleType(row.role),
-      };
-    });
+    const appointments: Appointment[] = (appointmentsRes.data ?? []).map((a) =>
+      mapAppointmentFromDb(a as Record<string, unknown>)
+    );
 
     return {
       ok: true,
       data: {
-        tenants: (tenantsRes.data ?? []) as Tenant[],
-        branches: (branchesRes.data ?? []) as Branch[],
+        tenants,
+        branches,
+        appUsers,
         profiles,
-        clients: (clientsRes.data ?? []) as Client[],
-        assets: (assetsRes.data ?? []) as CustomerAsset[],
-        catalogItems: (catalogRes.data ?? []) as CatalogItem[],
-        loanAssets: (loansRes.data ?? []) as LoanAsset[],
+        clients,
+        assets,
+        catalogItems,
+        loanAssets,
         workOrders,
-        appointments: (appointmentsRes.data ?? []) as Appointment[],
+        appointments,
       },
     };
   } catch (err) {
@@ -415,64 +463,248 @@ export async function pullSupabaseErpState(
 export async function seedDemoDataToSupabase(
   url: string,
   anonKey: string
-): Promise<{ ok: boolean; message: string }> {
+): Promise<{ ok: boolean; failedTable?: string; message: string }> {
   const client = getSupabaseClient(url, anonKey);
   if (!client) return { ok: false, message: 'Credenciales inválidas.' };
 
   try {
     const s = SEED_ERP_STATE;
-    const ops = [
-      client.from('tenants').upsert(s.tenants, { onConflict: 'id' }),
-      client.from('branches').upsert(s.branches, { onConflict: 'id' }),
-      client.from('clients').upsert(s.clients, { onConflict: 'id' }),
-      client.from('customer_assets').upsert(s.assets, { onConflict: 'id' }),
-      client.from('catalog_items').upsert(s.catalogItems, { onConflict: 'id' }),
-      client.from('loan_assets').upsert(s.loanAssets, { onConflict: 'id' }),
-    ];
+    const tenantTaxMap = new Map(s.tenants.map((t) => [ensureUUID(t.id), t.iva_rate]));
 
-    for (const res of await Promise.all(ops)) {
-      if (res.error) return { ok: false, message: res.error.message };
+    // Step 1: public.tenants
+    const tenantRows = s.tenants.map((t) => {
+      const tenantOrders = s.workOrders.filter((o) => o.tenant_id === t.id);
+      const maxNum = tenantOrders.reduce((acc, o) => {
+        const m = o.folio.match(/(\d+)$/);
+        return m ? Math.max(acc, parseInt(m[1], 10)) : acc;
+      }, 100);
+      return mapTenantToDb(t, maxNum);
+    });
+    const tenantsRes = await client
+      .from('tenants')
+      .upsert(tenantRows, { onConflict: 'id' });
+    if (tenantsRes.error) {
+      return {
+        ok: false,
+        failedTable: 'tenants',
+        message: formatPgError('tenants', tenantsRes.error),
+      };
     }
 
-    // Seed work_orders + child tables
-    const orderRows = s.workOrders.map((o) => ({ ...o }));
-    const woRes = await client.from('work_orders').upsert(orderRows, { onConflict: 'id' });
-    if (woRes.error) return { ok: false, message: woRes.error.message };
+    // Step 2: public.branches (strictly max 1 is_headquarters = true per tenant)
+    const branchRows = mapBranchesToDbSafe(s.branches);
+    const branchesRes = await client
+      .from('branches')
+      .upsert(branchRows, { onConflict: 'id' });
+    if (branchesRes.error) {
+      return {
+        ok: false,
+        failedTable: 'branches',
+        message: formatPgError('branches', branchesRes.error),
+      };
+    }
+
+    // Step 2b: public.app_users (custom login accounts without Supabase Auth)
+    if (s.appUsers.length > 0) {
+      const appUserRows = s.appUsers.map((u) => mapAppUserToDb(u));
+      const appUsersRes = await client
+        .from('app_users')
+        .upsert(appUserRows, { onConflict: 'id' });
+      if (appUsersRes.error) {
+        return {
+          ok: false,
+          failedTable: 'app_users',
+          message: formatPgError('app_users', appUsersRes.error),
+        };
+      }
+    }
+
+    // Step 3: public.clients, public.catalog_items, public.loan_assets
+    const hqByTenant = new Map<string, string>();
+    for (const b of s.branches) {
+      if (b.is_hq && !hqByTenant.has(b.tenant_id)) {
+        hqByTenant.set(b.tenant_id, b.id);
+      }
+    }
+    const clientRows = s.clients.map((c) =>
+      mapClientToDb(c, { branchId: hqByTenant.get(c.tenant_id) ?? null })
+    );
+    const clientsRes = await client
+      .from('clients')
+      .upsert(clientRows, { onConflict: 'id' });
+    if (clientsRes.error) {
+      return {
+        ok: false,
+        failedTable: 'clients',
+        message: formatPgError('clients', clientsRes.error),
+      };
+    }
+
+    const catalogRows = s.catalogItems.map((item) => mapCatalogItemToDb(item));
+    const catalogRes = await client
+      .from('catalog_items')
+      .upsert(catalogRows, { onConflict: 'id' });
+    if (catalogRes.error) {
+      return {
+        ok: false,
+        failedTable: 'catalog_items',
+        message: formatPgError('catalog_items', catalogRes.error),
+      };
+    }
+
+    const loanAssetRows = s.loanAssets.map((loan) => mapLoanAssetToDb(loan));
+    const loanAssetsRes = await client
+      .from('loan_assets')
+      .upsert(loanAssetRows, { onConflict: 'id' });
+    if (loanAssetsRes.error) {
+      return {
+        ok: false,
+        failedTable: 'loan_assets',
+        message: formatPgError('loan_assets', loanAssetsRes.error),
+      };
+    }
+
+    // Step 4: public.customer_assets (depends on clients)
+    const assetRows = s.assets.map((asset) => mapAssetToDb(asset));
+    const assetsRes = await client
+      .from('customer_assets')
+      .upsert(assetRows, { onConflict: 'id' });
+    if (assetsRes.error) {
+      return {
+        ok: false,
+        failedTable: 'customer_assets',
+        message: formatPgError('customer_assets', assetsRes.error),
+      };
+    }
+
+    // Step 5: public.work_orders (depends on clients & customer_assets; NO balance_due)
+    const orderRows = s.workOrders.map((o) =>
+      mapWorkOrderToDb(o, tenantTaxMap.get(ensureUUID(o.tenant_id)) ?? 19)
+    );
+    const woRes = await client
+      .from('work_orders')
+      .upsert(orderRows, { onConflict: 'id' });
+    if (woRes.error) {
+      return {
+        ok: false,
+        failedTable: 'work_orders',
+        message: formatPgError('work_orders', woRes.error),
+      };
+    }
+
+    // Step 6: Child tables & appointments (depends on work_orders)
+    const catalogTypeMap = new Map(
+      s.catalogItems.map((cat) => [
+        ensureUUID(cat.id),
+        cat.category === 'service' ? ('service' as const) : ('part' as const),
+      ])
+    );
 
     const itemRows = s.workOrders.flatMap((o) =>
-      o.items.map((it) => ({ ...it, work_order_id: o.id }))
+      o.items.map((it) =>
+        mapWorkOrderItemToDb(it, {
+          tenantId: o.tenant_id,
+          workOrderId: o.id,
+          catalogItemType: it.catalog_item_id
+            ? catalogTypeMap.get(ensureUUID(it.catalog_item_id))
+            : undefined,
+        })
+      )
     );
+    if (itemRows.length > 0) {
+      const itemsRes = await client
+        .from('work_order_items')
+        .upsert(itemRows, { onConflict: 'id' });
+      if (itemsRes.error) {
+        return {
+          ok: false,
+          failedTable: 'work_order_items',
+          message: formatPgError('work_order_items', itemsRes.error),
+        };
+      }
+    }
+
     const paymentRows = s.workOrders.flatMap((o) =>
-      o.payments.map((p) => ({ ...p, work_order_id: o.id }))
+      o.payments.map((p) =>
+        mapWorkOrderPaymentToDb(p, {
+          tenantId: o.tenant_id,
+          branchId: o.branch_id,
+          workOrderId: o.id,
+        })
+      )
     );
+    if (paymentRows.length > 0) {
+      const payRes = await client
+        .from('work_order_payments')
+        .upsert(paymentRows, { onConflict: 'id' });
+      if (payRes.error) {
+        return {
+          ok: false,
+          failedTable: 'work_order_payments',
+          message: formatPgError('work_order_payments', payRes.error),
+        };
+      }
+    }
+
     const photoRows = s.workOrders.flatMap((o) =>
-      o.photos.map((ph) => ({ ...ph, work_order_id: o.id }))
+      o.photos.map((ph) =>
+        mapWorkOrderPhotoToDb(ph, {
+          tenantId: o.tenant_id,
+          workOrderId: o.id,
+        })
+      )
     );
+    if (photoRows.length > 0) {
+      const phRes = await client
+        .from('work_order_photos')
+        .upsert(photoRows, { onConflict: 'id' });
+      if (phRes.error) {
+        return {
+          ok: false,
+          failedTable: 'work_order_photos',
+          message: formatPgError('work_order_photos', phRes.error),
+        };
+      }
+    }
+
     const loanRows = s.workOrders
       .filter((o) => Boolean(o.loan))
-      .map((o) => ({ ...o.loan!, work_order_id: o.id }));
+      .map((o) =>
+        mapWorkOrderLoanToDb(o.loan!, {
+          tenantId: o.tenant_id,
+          workOrderId: o.id,
+        })
+      );
+    if (loanRows.length > 0) {
+      const wlRes = await client
+        .from('work_order_loans')
+        .upsert(loanRows, { onConflict: 'id' });
+      if (wlRes.error) {
+        return {
+          ok: false,
+          failedTable: 'work_order_loans',
+          message: formatPgError('work_order_loans', wlRes.error),
+        };
+      }
+    }
 
-    await Promise.all([
-      itemRows.length
-        ? client.from('work_order_items').upsert(itemRows, { onConflict: 'id' })
-        : Promise.resolve({ error: null }),
-      paymentRows.length
-        ? client.from('work_order_payments').upsert(paymentRows, { onConflict: 'id' })
-        : Promise.resolve({ error: null }),
-      photoRows.length
-        ? client.from('work_order_photos').upsert(photoRows, { onConflict: 'id' })
-        : Promise.resolve({ error: null }),
-      loanRows.length
-        ? client.from('work_order_loans').upsert(loanRows, { onConflict: 'id' })
-        : Promise.resolve({ error: null }),
-      s.appointments.length
-        ? client.from('appointments').upsert(s.appointments, { onConflict: 'id' })
-        : Promise.resolve({ error: null }),
-    ]);
+    const appointmentRows = s.appointments.map((apt) => mapAppointmentToDb(apt));
+    if (appointmentRows.length > 0) {
+      const aptRes = await client
+        .from('appointments')
+        .upsert(appointmentRows, { onConflict: 'id' });
+      if (aptRes.error) {
+        return {
+          ok: false,
+          failedTable: 'appointments',
+          message: formatPgError('appointments', aptRes.error),
+        };
+      }
+    }
 
     return {
       ok: true,
-      message: `Datos demo sembrados en Supabase (${s.tenants.length} empresas, ${s.branches.length} sucursales, ${s.workOrders.length} OTs y ${s.appointments.length} citas).`,
+      message: `Datos demo sembrados en Supabase en orden estricto FK (${s.tenants.length} empresas, ${s.branches.length} sucursales, ${s.clients.length} clientes, ${s.assets.length} equipos, ${s.workOrders.length} OTs y ${s.appointments.length} citas).`,
     };
   } catch (err) {
     return {
@@ -488,103 +720,146 @@ export async function syncTenantToSupabase(cfg: SupabaseConfig, tenant: Tenant):
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('tenants').upsert(tenant, { onConflict: 'id' });
+  await client.from('tenants').upsert(mapTenantToDb(tenant), { onConflict: 'id' });
 }
 
 export async function syncBranchToSupabase(cfg: SupabaseConfig, branch: Branch): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('branches').upsert(branch, { onConflict: 'id' });
+  await client.from('branches').upsert(mapBranchToDb(branch), { onConflict: 'id' });
 }
 
 export async function deleteBranchFromSupabase(cfg: SupabaseConfig, branchId: string): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('branches').delete().eq('id', branchId);
+  await client.from('branches').delete().eq('id', ensureUUID(branchId));
 }
 
 export async function syncProfileToSupabase(cfg: SupabaseConfig, profile: TeamProfile): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client
-    .from('profiles')
-    .upsert({ ...profile, role: mapRoleTypeToDbRole(profile.role) }, { onConflict: 'id' });
+  await client.from('profiles').upsert(mapProfileToDb(profile), { onConflict: 'id' });
+}
+
+export async function syncAppUserToSupabase(
+  cfg: SupabaseConfig,
+  user: AppUser
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
+  const client = getSupabaseClient(cfg.url, cfg.anonKey);
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('app_users')
+    .upsert(mapAppUserToDb(user), { onConflict: 'id' });
+  if (res.error) {
+    return { ok: false, error: formatPgError('app_users', res.error) };
+  }
+  return { ok: true };
 }
 
 export async function syncClientToSupabase(cfg: SupabaseConfig, c: Client): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('clients').upsert(c, { onConflict: 'id' });
+  await client.from('clients').upsert(mapClientToDb(c), { onConflict: 'id' });
 }
 
 export async function syncAssetToSupabase(cfg: SupabaseConfig, a: CustomerAsset): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('customer_assets').upsert(a, { onConflict: 'id' });
+  await client.from('customer_assets').upsert(mapAssetToDb(a), { onConflict: 'id' });
 }
 
 export async function syncCatalogItemToSupabase(cfg: SupabaseConfig, item: CatalogItem): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('catalog_items').upsert(item, { onConflict: 'id' });
+  await client.from('catalog_items').upsert(mapCatalogItemToDb(item), { onConflict: 'id' });
 }
 
 export async function syncLoanAssetToSupabase(cfg: SupabaseConfig, loan: LoanAsset): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('loan_assets').upsert(loan, { onConflict: 'id' });
+  await client.from('loan_assets').upsert(mapLoanAssetToDb(loan), { onConflict: 'id' });
 }
 
-export async function syncWorkOrderToSupabase(cfg: SupabaseConfig, order: WorkOrder): Promise<void> {
+export async function syncWorkOrderToSupabase(
+  cfg: SupabaseConfig,
+  order: WorkOrder,
+  taxRate = 19
+): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('work_orders').upsert(order, { onConflict: 'id' });
 
-  // Sync child relational rows best-effort
-  await Promise.all([
-    order.items.length
-      ? client
-          .from('work_order_items')
-          .upsert(order.items.map((it) => ({ ...it, work_order_id: order.id })), { onConflict: 'id' })
-      : Promise.resolve(),
-    order.payments.length
-      ? client
-          .from('work_order_payments')
-          .upsert(order.payments.map((p) => ({ ...p, work_order_id: order.id })), { onConflict: 'id' })
-      : Promise.resolve(),
-    order.photos.length
-      ? client
-          .from('work_order_photos')
-          .upsert(order.photos.map((ph) => ({ ...ph, work_order_id: order.id })), { onConflict: 'id' })
-      : Promise.resolve(),
-    order.loan
-      ? client
-          .from('work_order_loans')
-          .upsert({ ...order.loan, work_order_id: order.id }, { onConflict: 'id' })
-      : Promise.resolve(),
-  ]);
+  const woRes = await client
+    .from('work_orders')
+    .upsert(mapWorkOrderToDb(order, taxRate), { onConflict: 'id' });
+  if (woRes.error) return;
+
+  // Sync child relational rows sequentially/best-effort
+  if (order.items.length > 0) {
+    await client.from('work_order_items').upsert(
+      order.items.map((it) =>
+        mapWorkOrderItemToDb(it, {
+          tenantId: order.tenant_id,
+          workOrderId: order.id,
+        })
+      ),
+      { onConflict: 'id' }
+    );
+  }
+  if (order.payments.length > 0) {
+    await client.from('work_order_payments').upsert(
+      order.payments.map((p) =>
+        mapWorkOrderPaymentToDb(p, {
+          tenantId: order.tenant_id,
+          branchId: order.branch_id,
+          workOrderId: order.id,
+        })
+      ),
+      { onConflict: 'id' }
+    );
+  }
+  if (order.photos.length > 0) {
+    await client.from('work_order_photos').upsert(
+      order.photos.map((ph) =>
+        mapWorkOrderPhotoToDb(ph, {
+          tenantId: order.tenant_id,
+          workOrderId: order.id,
+        })
+      ),
+      { onConflict: 'id' }
+    );
+  }
+  if (order.loan) {
+    await client.from('work_order_loans').upsert(
+      mapWorkOrderLoanToDb(order.loan, {
+        tenantId: order.tenant_id,
+        workOrderId: order.id,
+      }),
+      { onConflict: 'id' }
+    );
+  }
 }
 
 export async function deleteOrderItemFromSupabase(cfg: SupabaseConfig, itemId: string): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('work_order_items').delete().eq('id', itemId);
+  await client.from('work_order_items').delete().eq('id', ensureUUID(itemId));
 }
 
 export async function deleteOrderPhotoFromSupabase(cfg: SupabaseConfig, photoId: string): Promise<void> {
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('work_order_photos').delete().eq('id', photoId);
+  await client.from('work_order_photos').delete().eq('id', ensureUUID(photoId));
 }
 
 export async function syncAppointmentToSupabase(
@@ -594,7 +869,9 @@ export async function syncAppointmentToSupabase(
   if (!isSupabaseLive(cfg)) return;
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return;
-  await client.from('appointments').upsert(apt, { onConflict: 'id' });
+  await client
+    .from('appointments')
+    .upsert(mapAppointmentToDb(apt), { onConflict: 'id' });
 }
 
 // ---------- SUPABASE STORAGE (order-photos) ----------
@@ -613,7 +890,7 @@ export async function uploadOrderPhotoToStorage(
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return { ok: false, error: 'Cliente inválido' };
 
-  const path = `${params.tenantId}/${params.workOrderId}/${Date.now()}.webp`;
+  const path = `${ensureUUID(params.tenantId)}/${ensureUUID(params.workOrderId)}/${Date.now()}.webp`;
   const uploadRes = await client.storage.from('order-photos').upload(path, params.blob, {
     contentType: 'image/webp',
     upsert: true,
@@ -627,215 +904,52 @@ export async function uploadOrderPhotoToStorage(
   return { ok: true, publicUrl: data.publicUrl };
 }
 
-// ---------- SUPABASE AUTH + ONBOARDING ----------
+// ---------- DIRECT LOGIN VIA public.app_users (SIN SUPABASE AUTH) ----------
 
-export async function signInWithSupabaseAuth(
+export async function loginWithAppUsers(
   cfg: SupabaseConfig,
-  email: string,
+  username: string,
   password: string
 ): Promise<{ ok: boolean; user?: AuthSessionUser; error?: string }> {
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return { ok: false, error: 'Configura Supabase antes de iniciar sesión.' };
-
-  const authRes = await client.auth.signInWithPassword({
-    email: email.trim(),
-    password,
-  });
-  if (authRes.error || !authRes.data.user) {
-    return { ok: false, error: authRes.error?.message ?? 'Credenciales inválidas.' };
+  if (!client) {
+    return { ok: false, error: 'Configura Supabase antes de iniciar sesión.' };
   }
 
-  const uid = authRes.data.user.id;
-  const profRes = await client.from('profiles').select('*').eq('id', uid).maybeSingle();
-  const profile = profRes.data as (TeamProfile & { role: string }) | null;
+  const { data, error } = await client
+    .from('app_users')
+    .select('*, tenants(*), branches(*)')
+    .eq('username', username.trim())
+    .eq('pin_or_password', password.trim())
+    .eq('is_active', true)
+    .single();
 
-  return {
-    ok: true,
-    user: {
-      id: uid,
-      email: authRes.data.user.email ?? email.trim(),
-      full_name: profile?.full_name ?? authRes.data.user.email ?? 'Usuario',
-      tenant_id: profile?.tenant_id ?? '',
-      branch_id: profile?.branch_id ?? null,
-      role: mapDbRoleToRoleType(profile?.role ?? 'company_admin'),
-      mode: 'supabase',
-    },
-  };
-}
-
-export async function signUpAndRegisterTenantInSupabase(
-  cfg: SupabaseConfig,
-  input: {
-    fullName: string;
-    email: string;
-    password: string;
-    companyName: string;
-    taxId: string;
-    sector: IndustrySector;
-    hqName: string;
-  }
-): Promise<{
-  ok: boolean;
-  user?: AuthSessionUser;
-  tenant?: Tenant;
-  branch?: Branch;
-  profile?: TeamProfile;
-  error?: string;
-}> {
-  const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return { ok: false, error: 'Supabase no conectado.' };
-
-  const signUpRes = await client.auth.signUp({
-    email: input.email.trim(),
-    password: input.password,
-    options: {
-      data: { full_name: input.fullName.trim() },
-    },
-  });
-
-  if (signUpRes.error || !signUpRes.data.user) {
-    return { ok: false, error: signUpRes.error?.message ?? 'No se pudo registrar el usuario.' };
-  }
-
-  const uid = signUpRes.data.user.id;
-  const now = new Date().toISOString();
-  const tenantId = `tenant-${Date.now()}`;
-  const branchId = `branch-${Date.now()}`;
-
-  // Try RPC register_new_tenant first
-  const rpcRes = await client.rpc('register_new_tenant', {
-    p_user_id: uid,
-    p_full_name: input.fullName.trim(),
-    p_email: input.email.trim(),
-    p_company_name: input.companyName.trim(),
-    p_tax_id: input.taxId.trim(),
-    p_sector: input.sector,
-    p_hq_name: input.hqName.trim(),
-  });
-
-  if (!rpcRes.error && rpcRes.data) {
-    const data = rpcRes.data as { tenant_id?: string; branch_id?: string };
-    const finalTenantId = data.tenant_id ?? tenantId;
-    const finalBranchId = data.branch_id ?? branchId;
-    const tenant: Tenant = {
-      id: finalTenantId,
-      name: input.companyName.trim(),
-      tax_id: input.taxId.trim(),
-      sector: input.sector,
-      currency: 'CLP',
-      iva_rate: 19,
-      folio_prefix: input.companyName.slice(0, 2).toUpperCase() || 'OT',
-      whatsapp_enabled: true,
-      whatsapp_templates: SEED_ERP_STATE.tenants[0].whatsapp_templates,
-      phone: '',
-      email: input.email.trim(),
-      warranty_days: 90,
-      created_at: now,
-    };
-    const branch: Branch = {
-      id: finalBranchId,
-      tenant_id: finalTenantId,
-      name: input.hqName.trim(),
-      code: 'HQ-01',
-      is_hq: true,
-      address: '',
-      city: '',
-      phone: '',
-      business_hours: 'Lun-Vie 09:00 - 18:30',
-    };
-    const profile: TeamProfile = {
-      id: uid,
-      tenant_id: finalTenantId,
-      branch_id: null,
-      full_name: input.fullName.trim(),
-      email: input.email.trim(),
-      role: 'admin',
-      active: true,
-      created_at: now,
-    };
+  if (error || !data) {
     return {
-      ok: true,
-      tenant,
-      branch,
-      profile,
-      user: {
-        id: uid,
-        email: input.email.trim(),
-        full_name: input.fullName.trim(),
-        tenant_id: finalTenantId,
-        branch_id: null,
-        role: 'admin',
-        mode: 'supabase',
-      },
+      ok: false,
+      error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
     };
   }
 
-  // Fallback sequential inserts if RPC not yet installed
-  const tenant: Tenant = {
-    id: tenantId,
-    name: input.companyName.trim(),
-    tax_id: input.taxId.trim() || '76.000.000-0',
-    sector: input.sector,
-    currency: 'CLP',
-    iva_rate: 19,
-    folio_prefix: input.companyName.slice(0, 2).toUpperCase() || 'OT',
-    whatsapp_enabled: true,
-    whatsapp_templates: SEED_ERP_STATE.tenants[0].whatsapp_templates,
-    phone: '',
-    email: input.email.trim(),
-    warranty_days: 90,
-    created_at: now,
-  };
-  const branch: Branch = {
-    id: branchId,
-    tenant_id: tenantId,
-    name: input.hqName.trim() || 'Casa Matriz',
-    code: 'HQ-01',
-    is_hq: true,
-    address: 'Dirección principal por definir',
-    city: 'Santiago',
-    phone: '',
-    business_hours: 'Lun-Vie 09:00 - 18:30',
-  };
-  const profile: TeamProfile = {
-    id: uid,
-    tenant_id: tenantId,
-    branch_id: null,
-    full_name: input.fullName.trim(),
-    email: input.email.trim(),
-    role: 'admin',
-    active: true,
-    created_at: now,
-  };
-
-  await client.from('tenants').insert(tenant);
-  await client.from('branches').insert(branch);
-  await client.from('profiles').insert({
-    ...profile,
-    role: 'company_admin',
-  });
+  const row = data as Record<string, unknown>;
+  const rawTenant = row.tenants as Record<string, unknown> | null | undefined;
+  const rawBranch = row.branches as Record<string, unknown> | null | undefined;
 
   return {
     ok: true,
-    tenant,
-    branch,
-    profile,
     user: {
-      id: uid,
-      email: input.email.trim(),
-      full_name: input.fullName.trim(),
-      tenant_id: tenantId,
-      branch_id: null,
-      role: 'admin',
+      id: String(row.id),
+      username: String(row.username ?? username.trim()),
+      full_name: String(row.full_name ?? row.username ?? 'Usuario'),
+      tenant_id: row.tenant_id != null ? String(row.tenant_id) : null,
+      branch_id: row.branch_id != null ? String(row.branch_id) : null,
+      role: mapDbRoleToRoleType(row.role != null ? String(row.role) : null),
+      is_active: Boolean(row.is_active ?? true),
       mode: 'supabase',
+      tenant: rawTenant ? mapTenantFromDb(rawTenant) : null,
+      branch: rawBranch ? mapBranchFromDb(rawBranch) : null,
     },
   };
-}
-
-export async function signOutFromSupabase(cfg: SupabaseConfig): Promise<void> {
-  const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.auth.signOut();
 }
 
 // ---------- RPC get_public_order_status ----------
@@ -865,35 +979,34 @@ export async function fetchPublicOrderStatusViaRpc(
     }
 
     const raw = (Array.isArray(res.data) ? res.data[0] : res.data) as {
-      order?: WorkOrder;
-      tenant?: Tenant;
-      branch?: Branch;
-      client?: Client;
-      asset?: CustomerAsset;
-      items?: WorkOrderItem[];
-      payments?: WorkOrderPayment[];
-      photos?: WorkOrderPhoto[];
+      order?: Record<string, unknown>;
+      tenant?: Record<string, unknown>;
+      branch?: Record<string, unknown>;
+      client?: Record<string, unknown>;
+      asset?: Record<string, unknown>;
+      items?: Array<Record<string, unknown>>;
+      payments?: Array<Record<string, unknown>>;
+      photos?: Array<Record<string, unknown>>;
     } | null;
 
     if (!raw?.order || !raw?.tenant) {
       return { ok: false, error: 'Orden no encontrada en RPC' };
     }
 
-    const order: WorkOrder = {
-      ...raw.order,
-      items: raw.items ?? raw.order.items ?? [],
-      payments: raw.payments ?? raw.order.payments ?? [],
-      photos: raw.photos ?? raw.order.photos ?? [],
-    };
+    const order = mapWorkOrderFromDb(raw.order, {
+      items: raw.items?.map(mapOrderItemFromDb),
+      payments: raw.payments?.map(mapOrderPaymentFromDb),
+      photos: raw.photos?.map(mapOrderPhotoFromDb),
+    });
 
     return {
       ok: true,
       data: {
         order,
-        tenant: raw.tenant,
-        branch: raw.branch,
-        client: raw.client,
-        asset: raw.asset,
+        tenant: mapTenantFromDb(raw.tenant),
+        branch: raw.branch ? mapBranchFromDb(raw.branch) : undefined,
+        client: raw.client ? mapClientFromDb(raw.client) : undefined,
+        asset: raw.asset ? mapAssetFromDb(raw.asset) : undefined,
       },
     };
   } catch (err) {
@@ -905,43 +1018,71 @@ export async function upsertMigratedDataToSupabase(
   url: string,
   anonKey: string,
   payload: {
-    clients: unknown[];
-    assets: unknown[];
-    workOrders: unknown[];
+    clients: Client[];
+    assets: CustomerAsset[];
+    workOrders: WorkOrder[];
   }
 ): Promise<{ ok: boolean; error?: string }> {
-  const baseUrl = normalizeUrl(url);
-  const headers = {
-    apikey: anonKey.trim(),
-    Authorization: `Bearer ${anonKey.trim()}`,
-    'Content-Type': 'application/json',
-    Prefer: 'resolution=merge-duplicates',
-  };
+  const client = getSupabaseClient(url, anonKey);
+  if (!client) return { ok: false, error: 'Credenciales Supabase inválidas.' };
 
   try {
     if (payload.clients.length > 0) {
-      const res = await fetch(`${baseUrl}/rest/v1/clients`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload.clients),
-      });
-      if (!res.ok) return { ok: false, error: `HTTP ${res.status} al insertar clients` };
+      const rows = payload.clients.map((c) => mapClientToDb(c));
+      const res = await client.from('clients').upsert(rows, { onConflict: 'id' });
+      if (res.error) return { ok: false, error: formatPgError('clients', res.error) };
     }
     if (payload.assets.length > 0) {
-      const res = await fetch(`${baseUrl}/rest/v1/customer_assets`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload.assets),
-      });
-      if (!res.ok) return { ok: false, error: `HTTP ${res.status} al insertar customer_assets` };
+      const rows = payload.assets.map((a) => mapAssetToDb(a));
+      const res = await client
+        .from('customer_assets')
+        .upsert(rows, { onConflict: 'id' });
+      if (res.error) {
+        return { ok: false, error: formatPgError('customer_assets', res.error) };
+      }
     }
     if (payload.workOrders.length > 0) {
-      const res = await fetch(`${baseUrl}/rest/v1/work_orders`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload.workOrders),
-      });
-      if (!res.ok) return { ok: false, error: `HTTP ${res.status} al insertar work_orders` };
+      const rows = payload.workOrders.map((wo) => mapWorkOrderToDb(wo, 0));
+      const res = await client.from('work_orders').upsert(rows, { onConflict: 'id' });
+      if (res.error) {
+        return { ok: false, error: formatPgError('work_orders', res.error) };
+      }
+      const itemRows = payload.workOrders.flatMap((o) =>
+        o.items.map((it) =>
+          mapWorkOrderItemToDb(it, {
+            tenantId: o.tenant_id,
+            workOrderId: o.id,
+          })
+        )
+      );
+      if (itemRows.length > 0) {
+        const itRes = await client
+          .from('work_order_items')
+          .upsert(itemRows, { onConflict: 'id' });
+        if (itRes.error) {
+          return { ok: false, error: formatPgError('work_order_items', itRes.error) };
+        }
+      }
+      const payRows = payload.workOrders.flatMap((o) =>
+        o.payments.map((p) =>
+          mapWorkOrderPaymentToDb(p, {
+            tenantId: o.tenant_id,
+            branchId: o.branch_id,
+            workOrderId: o.id,
+          })
+        )
+      );
+      if (payRows.length > 0) {
+        const payRes = await client
+          .from('work_order_payments')
+          .upsert(payRows, { onConflict: 'id' });
+        if (payRes.error) {
+          return {
+            ok: false,
+            error: formatPgError('work_order_payments', payRes.error),
+          };
+        }
+      }
     }
     return { ok: true };
   } catch (err) {
@@ -949,40 +1090,57 @@ export async function upsertMigratedDataToSupabase(
   }
 }
 
-export const SUPABASE_SCHEMA_SQL = `-- FIXICLOUD Phase 3 Production Schema (Supabase / PostgreSQL + Storage + RPC)
-create table if not exists tenants (
-  id text primary key,
+export const SUPABASE_SCHEMA_SQL = `-- FIXICLOUD Phase 3 Production Schema (UUID + PostgreSQL Exact Columns)
+create extension if not exists "pgcrypto";
+
+create table if not exists public.tenants (
+  id uuid primary key default gen_random_uuid(),
   name text not null,
+  legal_name text,
   tax_id text,
-  sector text not null default 'computing',
+  industry text not null default 'computing',
   currency text not null default 'CLP',
-  iva_rate numeric not null default 19,
-  folio_prefix text not null default 'OT',
+  tax_rate numeric not null default 19,
+  logo_url text,
+  order_prefix text not null default 'OT',
+  last_order_number integer not null default 100,
+  terms_and_conditions text,
   whatsapp_enabled boolean not null default true,
-  whatsapp_templates jsonb not null default '{}'::jsonb,
-  phone text,
-  email text,
-  warranty_days integer default 90,
-  legal_terms text,
+  is_active boolean not null default true,
   created_at timestamptz default now()
 );
 
-create table if not exists branches (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
+create table if not exists public.branches (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
   name text not null,
   code text not null,
-  is_hq boolean not null default false,
+  is_headquarters boolean not null default false,
   address text,
-  city text,
   phone text,
-  business_hours text
+  email text,
+  is_active boolean not null default true
 );
 
-create table if not exists profiles (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  branch_id text references branches(id) on delete set null,
+create unique index if not exists idx_single_hq_per_tenant
+  on public.branches (tenant_id) where (is_headquarters = true);
+
+create table if not exists public.app_users (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid references public.tenants(id) on delete cascade,
+  branch_id uuid references public.branches(id) on delete set null,
+  username text unique not null,
+  pin_or_password text not null,
+  full_name text not null,
+  role text not null default 'technician',
+  is_active boolean not null default true,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.profiles (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid references public.tenants(id) on delete cascade,
+  branch_id uuid references public.branches(id) on delete set null,
   full_name text not null,
   email text not null,
   role text not null default 'company_admin',
@@ -990,141 +1148,158 @@ create table if not exists profiles (
   created_at timestamptz default now()
 );
 
-create table if not exists clients (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  name text not null,
-  rut text,
+create table if not exists public.clients (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  branch_id uuid references public.branches(id) on delete set null,
+  full_name text not null,
+  tax_id text,
   phone text,
+  secondary_phone text,
   email text,
   address text,
   city text,
+  notes text,
+  legacy_mdb_id text
+);
+
+create table if not exists public.customer_assets (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  client_id uuid not null references public.clients(id) on delete cascade,
+  asset_category text not null default 'Equipo',
+  brand text,
+  model text,
+  serial_number text,
+  unlock_credentials text,
+  custom_attributes jsonb default '{}'::jsonb,
+  legacy_mdb_id text
+);
+
+create table if not exists public.catalog_items (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  sku text,
+  name text not null,
+  description text,
+  type text not null default 'part',
+  cost_price numeric not null default 0,
+  sale_price numeric not null default 0,
+  stock_quantity integer not null default 0,
+  min_stock integer not null default 1,
+  track_inventory boolean not null default true,
+  is_active boolean not null default true
+);
+
+create table if not exists public.loan_assets (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  internal_code text not null,
+  name text not null,
+  serial_number text,
+  accessories_included text,
+  value_amount numeric not null default 0,
+  status text not null default 'available',
   notes text
 );
 
-create table if not exists customer_assets (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  client_id text references clients(id) on delete cascade,
-  category text,
-  brand text,
-  model text,
-  serial_imei text,
-  password_pattern text,
-  custom_attributes jsonb default '{}'::jsonb
-);
-
-create table if not exists catalog_items (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  branch_id text references branches(id) on delete cascade,
-  sku text,
-  name text not null,
-  category text not null default 'part',
-  cost_price numeric not null default 0,
-  sale_price numeric not null default 0,
-  stock_qty integer not null default 0,
-  min_stock integer not null default 1
-);
-
-create table if not exists loan_assets (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  branch_id text references branches(id) on delete cascade,
-  code text not null,
-  name text not null,
-  brand_model text,
-  serial_number text,
-  status text not null default 'available',
-  condition_notes text
-);
-
-create table if not exists work_orders (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  branch_id text references branches(id) on delete cascade,
+create table if not exists public.work_orders (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  order_number integer not null default 100,
   folio text not null,
   tracking_code text not null,
-  client_id text references clients(id),
-  asset_id text references customer_assets(id),
-  status text not null default 'received',
+  client_id uuid not null references public.clients(id),
+  asset_id uuid not null references public.customer_assets(id),
   modality text not null default 'workshop',
-  visit_address text,
-  visit_scheduled_at text,
+  service_address text,
+  status text not null default 'received',
+  priority text not null default 'normal',
   accessories_received text,
-  entry_condition text,
+  physical_condition_notes text,
   reported_symptoms text,
   technical_diagnosis text,
   work_performed text,
   parts_and_observations text,
-  assigned_technician text,
-  apply_iva boolean not null default true,
+  internal_notes text,
+  apply_tax boolean not null default true,
+  tax_rate numeric not null default 19,
+  subtotal_amount numeric not null default 0,
   discount_amount numeric not null default 0,
-  items jsonb default '[]'::jsonb,
-  payments jsonb default '[]'::jsonb,
-  photos jsonb default '[]'::jsonb,
-  loan jsonb,
+  tax_amount numeric not null default 0,
+  total_amount numeric not null default 0,
+  paid_amount numeric not null default 0,
+  balance_due numeric generated always as (total_amount - paid_amount) stored,
   warranty_days integer default 90,
-  legacy_mdb_id text unique,
-  created_at timestamptz default now(),
-  updated_at timestamptz default now()
+  received_at timestamptz default now(),
+  promised_at timestamptz
 );
 
-create table if not exists work_order_items (
-  id text primary key,
-  work_order_id text references work_orders(id) on delete cascade,
-  source text not null default 'free',
-  catalog_item_id text,
-  sku text,
+create table if not exists public.work_order_items (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  work_order_id uuid not null references public.work_orders(id) on delete cascade,
+  catalog_item_id uuid references public.catalog_items(id),
+  item_type text not null default 'custom',
   description text not null,
-  qty integer not null default 1,
-  unit_price numeric not null default 0
+  quantity integer not null default 1,
+  unit_price numeric not null default 0,
+  total_price numeric generated always as (quantity * unit_price) stored,
+  deducted_from_stock boolean not null default false
 );
 
-create table if not exists work_order_photos (
-  id text primary key,
-  work_order_id text references work_orders(id) on delete cascade,
-  url text not null,
+create table if not exists public.work_order_photos (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  work_order_id uuid not null references public.work_orders(id) on delete cascade,
+  storage_path text not null default 'demo',
+  public_url text not null,
   stage text not null default 'diagnosis',
   caption text,
   created_at timestamptz default now()
 );
 
-create table if not exists work_order_loans (
-  id text primary key,
-  work_order_id text references work_orders(id) on delete cascade,
-  loan_asset_id text,
-  asset_code text,
-  asset_name text,
-  loaned_at timestamptz,
+create table if not exists public.work_order_loans (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  work_order_id uuid not null references public.work_orders(id) on delete cascade,
+  loan_asset_id uuid not null references public.loan_assets(id),
+  loaned_at timestamptz default now(),
+  expected_return_at timestamptz,
   returned_at timestamptz,
-  delivery_notes text
+  condition_on_loan text,
+  condition_on_return text,
+  is_active boolean not null default true
 );
 
-create table if not exists work_order_payments (
-  id text primary key,
-  work_order_id text references work_orders(id) on delete cascade,
-  date text not null,
+create table if not exists public.work_order_payments (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  work_order_id uuid not null references public.work_orders(id) on delete cascade,
+  receipt_number text,
   amount numeric not null default 0,
-  method text not null default 'transfer',
-  reference text
+  payment_method text not null default 'transfer',
+  notes text,
+  paid_at timestamptz default now()
 );
 
-create table if not exists appointments (
-  id text primary key,
-  tenant_id text references tenants(id) on delete cascade,
-  branch_id text references branches(id) on delete cascade,
+create table if not exists public.appointments (
+  id uuid primary key default gen_random_uuid(),
+  tenant_id uuid not null references public.tenants(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete cascade,
+  client_id uuid not null references public.clients(id),
+  work_order_id uuid references public.work_orders(id),
   subject text not null,
-  client_id text references clients(id),
+  description text,
+  scheduled_start timestamptz not null,
+  scheduled_end timestamptz not null,
   modality text not null default 'workshop',
-  visit_address text,
-  technician text,
-  date text not null,
-  start_time text not null,
-  end_time text not null,
+  address text,
   status text not null default 'scheduled',
-  notes text,
-  work_order_id text references work_orders(id),
   created_at timestamptz default now()
 );
 
@@ -1135,7 +1310,7 @@ on conflict (id) do nothing;
 
 -- RPC Onboarding de nueva empresa
 create or replace function register_new_tenant(
-  p_user_id text,
+  p_user_id uuid,
   p_full_name text,
   p_email text,
   p_company_name text,
@@ -1144,16 +1319,16 @@ create or replace function register_new_tenant(
   p_hq_name text
 ) returns jsonb language plpgsql security definer as $$
 declare
-  v_tenant_id text := 'tenant-' || extract(epoch from now())::bigint::text;
-  v_branch_id text := 'branch-' || extract(epoch from now())::bigint::text;
+  v_tenant_id uuid := gen_random_uuid();
+  v_branch_id uuid := gen_random_uuid();
 begin
-  insert into tenants (id, name, tax_id, sector, folio_prefix, email)
-  values (v_tenant_id, p_company_name, p_tax_id, p_sector, upper(left(p_company_name, 2)), p_email);
+  insert into public.tenants (id, name, legal_name, tax_id, industry, order_prefix)
+  values (v_tenant_id, p_company_name, p_company_name, p_tax_id, p_sector, upper(left(p_company_name, 2)));
 
-  insert into branches (id, tenant_id, name, code, is_hq, business_hours)
-  values (v_branch_id, v_tenant_id, p_hq_name, 'HQ-01', true, 'Lun-Vie 09:00 - 18:30');
+  insert into public.branches (id, tenant_id, name, code, is_headquarters)
+  values (v_branch_id, v_tenant_id, p_hq_name, 'HQ-01', true);
 
-  insert into profiles (id, tenant_id, branch_id, full_name, email, role, active)
+  insert into public.profiles (id, tenant_id, branch_id, full_name, email, role, active)
   values (p_user_id, v_tenant_id, null, p_full_name, p_email, 'company_admin', true);
 
   return jsonb_build_object('tenant_id', v_tenant_id, 'branch_id', v_branch_id);
@@ -1164,14 +1339,14 @@ $$;
 create or replace function get_public_order_status(p_code text)
 returns jsonb language plpgsql security definer as $$
 declare
-  v_order work_orders%rowtype;
-  v_tenant tenants%rowtype;
-  v_branch branches%rowtype;
-  v_client clients%rowtype;
-  v_asset customer_assets%rowtype;
+  v_order public.work_orders%rowtype;
+  v_tenant public.tenants%rowtype;
+  v_branch public.branches%rowtype;
+  v_client public.clients%rowtype;
+  v_asset public.customer_assets%rowtype;
 begin
   select * into v_order
-  from work_orders
+  from public.work_orders
   where upper(tracking_code) = upper(trim(p_code))
      or upper(folio) = upper(trim(p_code))
   limit 1;
@@ -1180,10 +1355,10 @@ begin
     return null;
   end if;
 
-  select * into v_tenant from tenants where id = v_order.tenant_id;
-  select * into v_branch from branches where id = v_order.branch_id;
-  select * into v_client from clients where id = v_order.client_id;
-  select * into v_asset from customer_assets where id = v_order.asset_id;
+  select * into v_tenant from public.tenants where id = v_order.tenant_id;
+  select * into v_branch from public.branches where id = v_order.branch_id;
+  select * into v_client from public.clients where id = v_order.client_id;
+  select * into v_asset from public.customer_assets where id = v_order.asset_id;
 
   return jsonb_build_object(
     'order', to_jsonb(v_order),
@@ -1191,9 +1366,9 @@ begin
     'branch', to_jsonb(v_branch),
     'client', to_jsonb(v_client),
     'asset', to_jsonb(v_asset),
-    'items', coalesce((select jsonb_agg(i) from work_order_items i where i.work_order_id = v_order.id), v_order.items),
-    'payments', coalesce((select jsonb_agg(p) from work_order_payments p where p.work_order_id = v_order.id), v_order.payments),
-    'photos', coalesce((select jsonb_agg(ph) from work_order_photos ph where ph.work_order_id = v_order.id), v_order.photos)
+    'items', coalesce((select jsonb_agg(i) from public.work_order_items i where i.work_order_id = v_order.id), '[]'::jsonb),
+    'payments', coalesce((select jsonb_agg(p) from public.work_order_payments p where p.work_order_id = v_order.id), '[]'::jsonb),
+    'photos', coalesce((select jsonb_agg(ph) from public.work_order_photos ph where ph.work_order_id = v_order.id), '[]'::jsonb)
   );
 end;
 $$;`;

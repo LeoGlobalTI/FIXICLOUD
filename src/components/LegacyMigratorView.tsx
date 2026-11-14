@@ -197,10 +197,10 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900">
+          <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-slate-900">
             Migrador Legacy CP Reparaciones (.mdb / .csv / /Imagenes/)
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
@@ -243,7 +243,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
               <select
                 value={targetTenantId}
                 onChange={(e) => handleTenantChange(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               >
                 {erpState.tenants.map((t) => (
                   <option key={t.id} value={t.id}>
@@ -259,7 +259,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
               <select
                 value={targetBranchId}
                 onChange={(e) => setTargetBranchId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               >
                 {tenantBranches.map((b) => (
                   <option key={b.id} value={b.id}>
@@ -288,7 +288,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
             </p>
             <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
               <label className="inline-flex items-center gap-2 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-4 py-2.5 text-xs font-semibold cursor-pointer transition-colors">
-                <FileSpreadsheet className="h-4 w-4" />
+                <FileSpreadsheet className="h-4 w-4 text-[#6EC1F8]" />
                 <span>Seleccionar .mdb / .csv / .json</span>
                 <input
                   type="file"
@@ -316,15 +316,15 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
 
       {/* Step 2 */}
       {step === 2 && (
-        <section className="rounded-xl bg-white border border-slate-200 p-5 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+        <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]/70">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900">
                 Mapeo Inteligente y Deduplicación — {sourceLabel}
               </h2>
               <div className="mt-0.5 text-xs text-slate-500">
                 Tablas detectadas:{' '}
-                <span className="font-mono text-cyan-700 font-semibold">
+                <span className="font-mono text-[#3E92CC] font-semibold">
                   {detectedTables.join(', ')}
                 </span>{' '}
                 · {previewRows.length} registros listos para revisar
@@ -334,37 +334,37 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
             <button
               type="button"
               onClick={() => setStep(3)}
-              className="rounded-lg bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-xs font-semibold"
+              className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2 text-xs font-semibold transition-colors"
             >
               Continuar a Paso 3: /Imagenes/ y Migración
             </button>
           </div>
 
           {binarySample.length > 0 && (
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-[11px] font-mono text-slate-600">
+            <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC]/70 p-3 text-[11px] font-mono text-slate-600">
               Cadenas detectadas en cabecera binaria: {binarySample.slice(0, 8).join(' · ')}
             </div>
           )}
 
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
+          <div className="overflow-x-auto rounded-2xl border border-[#D8E4EC]/70">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-semibold text-slate-600">
-                  <th className="py-2.5 px-3">legacy_mdb_id</th>
-                  <th className="py-2.5 px-3">Cliente (Deduplicación)</th>
-                  <th className="py-2.5 px-3">Equipo / Serie</th>
-                  <th className="py-2.5 px-3">Síntomas &amp; Diagnóstico</th>
-                  <th className="py-2.5 px-3 text-right">Importe / Abono</th>
-                  <th className="py-2.5 px-3">Acción</th>
+                <tr className="bg-[#F4F6FB]/70 border-b border-[#D8E4EC]/70 text-[11px] font-semibold text-slate-500">
+                  <th className="py-3 px-3.5">legacy_mdb_id</th>
+                  <th className="py-3 px-3.5">Cliente (Deduplicación)</th>
+                  <th className="py-3 px-3.5">Equipo / Serie</th>
+                  <th className="py-3 px-3.5">Síntomas &amp; Diagnóstico</th>
+                  <th className="py-3 px-3.5 text-right">Importe / Abono</th>
+                  <th className="py-3 px-3.5">Acción</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100">
+              <tbody className="divide-y divide-[#D8E4EC]/50">
                 {previewRows.map((row) => (
-                  <tr key={row.record.legacyId} className="hover:bg-slate-50">
-                    <td className="py-2.5 px-3 font-mono font-bold text-blue-700">
+                  <tr key={row.record.legacyId} className="hover:bg-[#F4F6FB]/70 transition-colors">
+                    <td className="py-3 px-3.5 font-mono font-bold text-[#0A2463]">
                       {row.record.legacyId}
                     </td>
-                    <td className="py-2.5 px-3">
+                    <td className="py-3 px-3.5">
                       <div className="font-semibold text-slate-900">
                         {row.record.clientName}
                       </div>
@@ -372,8 +372,8 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                         <span
                           className={
                             row.clientStatus === 'existing'
-                              ? 'text-cyan-700 font-semibold'
-                              : 'text-emerald-700 font-semibold'
+                              ? 'text-[#3E92CC] font-semibold'
+                              : 'text-[#1B998B] font-semibold'
                           }
                         >
                           {row.clientStatus === 'existing'
@@ -382,7 +382,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                         </span>
                       </div>
                     </td>
-                    <td className="py-2.5 px-3">
+                    <td className="py-3 px-3.5">
                       <div className="font-medium text-slate-800">
                         {row.record.category} {row.record.brand} {row.record.model}
                       </div>
@@ -390,7 +390,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                         S/N: {row.record.serialImei}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 max-w-xs">
+                    <td className="py-3 px-3.5 max-w-xs">
                       <div className="text-slate-800 truncate">
                         {row.record.symptoms}
                       </div>
@@ -398,19 +398,23 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                         {row.record.diagnosis}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 text-right font-mono tabular-nums">
+                    <td className="py-3 px-3.5 text-right font-mono tabular-nums">
                       <div className="font-bold text-slate-900">
                         {formatCurrency(row.record.totalAmount, targetTenant.currency)}
                       </div>
-                      <div className="text-[11px] text-emerald-700">
+                      <div className="text-[11px] text-[#1B998B]">
                         Abono: {formatCurrency(row.record.paidAmount, targetTenant.currency)}
                       </div>
                     </td>
-                    <td className="py-2.5 px-3 font-semibold text-[11px]">
+                    <td className="py-3 px-3.5 font-semibold text-[11px]">
                       {row.orderStatus === 'duplicate_skip' ? (
-                        <span className="text-amber-700">Ya migrada (Omitir)</span>
+                        <span className="inline-flex items-center rounded-full bg-amber-50 border border-amber-200 px-2.5 py-0.5 text-amber-700">
+                          Ya migrada (Omitir)
+                        </span>
                       ) : (
-                        <span className="text-emerald-700">Importar OT</span>
+                        <span className="inline-flex items-center rounded-full bg-[#EBF8F6] border border-[#1B998B]/25 px-2.5 py-0.5 text-[#1B998B]">
+                          Importar OT
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -423,10 +427,10 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
 
       {/* Step 3 */}
       {step === 3 && (
-        <section className="rounded-xl bg-white border border-slate-200 p-6 space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-200">
+        <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-5">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#D8E4EC]/70">
             <div>
-              <h2 className="text-sm font-bold text-slate-900">
+              <h2 className="text-sm font-semibold text-slate-900">
                 Emparejamiento de Carpeta /Imagenes/ y Ejecución Final
               </h2>
               <p className="text-xs text-slate-500">
@@ -434,8 +438,8 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
               </p>
             </div>
 
-            <label className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white px-3.5 py-2 text-xs font-semibold cursor-pointer">
-              <ImagePlus className="h-4 w-4" />
+            <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-4 py-2 text-xs font-semibold cursor-pointer transition-colors">
+              <ImagePlus className="h-4 w-4 text-[#6EC1F8]" />
               <span>Seleccionar Fotos /Imagenes/</span>
               <input
                 type="file"
@@ -448,11 +452,11 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
           </div>
 
           {uploadedPhotos.length > 0 && (
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-xs space-y-1">
+            <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC]/70 p-3.5 text-xs space-y-1">
               <div className="font-semibold text-slate-800">
                 {uploadedPhotos.length} imagen(es) cargada(s) para emparejar:
               </div>
-              <div className="flex flex-wrap gap-2 font-mono text-[11px] text-cyan-800">
+              <div className="flex flex-wrap gap-2 font-mono text-[11px] text-[#3E92CC]">
                 {uploadedPhotos.map((p, idx) => (
                   <span key={`${p.name}-${idx}`}>{p.name}</span>
                 ))}
@@ -460,28 +464,28 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-              <div className="text-slate-500">Órdenes a Importar</div>
-              <div className="font-mono text-lg font-bold text-slate-900">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
+            <div className="rounded-2xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 p-4">
+              <div className="text-slate-500 font-medium">Órdenes a Importar</div>
+              <div className="font-mono text-xl font-bold text-[#0A2463] mt-1 tabular-nums">
                 {previewRows.filter((r) => r.orderStatus === 'import').length}
               </div>
             </div>
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-              <div className="text-slate-500">Clientes Nuevos</div>
-              <div className="font-mono text-lg font-bold text-emerald-700">
+            <div className="rounded-2xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 p-4">
+              <div className="text-slate-500 font-medium">Clientes Nuevos</div>
+              <div className="font-mono text-xl font-bold text-[#1B998B] mt-1 tabular-nums">
                 {previewRows.filter((r) => r.clientStatus === 'new').length}
               </div>
             </div>
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-              <div className="text-slate-500">Duplicados Omitidos</div>
-              <div className="font-mono text-lg font-bold text-amber-700">
+            <div className="rounded-2xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 p-4">
+              <div className="text-slate-500 font-medium">Duplicados Omitidos</div>
+              <div className="font-mono text-xl font-bold text-amber-700 mt-1 tabular-nums">
                 {previewRows.filter((r) => r.orderStatus === 'duplicate_skip').length}
               </div>
             </div>
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3">
-              <div className="text-slate-500">Fotos Emparejadas</div>
-              <div className="font-mono text-lg font-bold text-blue-700">
+            <div className="rounded-2xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 p-4">
+              <div className="text-slate-500 font-medium">Fotos Emparejadas</div>
+              <div className="font-mono text-xl font-bold text-[#3E92CC] mt-1 tabular-nums">
                 {previewRows.reduce((acc, r) => acc + r.matchedPhotos.length, 0)}
               </div>
             </div>
@@ -491,22 +495,22 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs font-semibold text-slate-700">
                 <span>Progreso de Migración</span>
-                <span className="font-mono">{progress}%</span>
+                <span className="font-mono tabular-nums">{progress}%</span>
               </div>
-              <div className="h-2.5 w-full rounded-full bg-slate-200 overflow-hidden">
+              <div className="h-2.5 w-full rounded-full bg-[#F4F6FB] border border-[#D8E4EC]/70 overflow-hidden">
                 <div
-                  className="h-full bg-blue-600 transition-all duration-300"
+                  className="h-full rounded-full bg-[#3E92CC] transition-all duration-300"
                   style={{ width: `${progress}%` }}
                 />
               </div>
             </div>
           ) : null}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-[#D8E4EC]/60">
             <button
               type="button"
               onClick={() => setStep(2)}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              className="rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-4 py-2 text-xs font-semibold text-slate-700 transition-colors"
             >
               Volver al Mapeo
             </button>
@@ -531,9 +535,9 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                 <button
                   type="button"
                   onClick={onGoToConsole}
-                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold whitespace-nowrap"
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold whitespace-nowrap transition-colors"
                 >
-                  <FolderUp className="h-3.5 w-3.5" />
+                  <FolderUp className="h-3.5 w-3.5 text-[#6EC1F8]" />
                   <span>Ver Órdenes</span>
                 </button>
               }

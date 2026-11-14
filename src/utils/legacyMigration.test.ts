@@ -40,6 +40,7 @@ const baseState: ErpState = {
     },
   ],
   profiles: [],
+  appUsers: [],
   clients: [
     {
       id: 'c-existing',

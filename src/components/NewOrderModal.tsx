@@ -13,6 +13,7 @@ import {
   generateTrackingCode,
   getSectorCustomFields,
 } from '../utils/erpLogic';
+import { generateUUID } from '../utils/uuid';
 
 export interface NewOrderPrefill {
   clientId?: string;
@@ -116,7 +117,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
     let newClientObj: Client | undefined;
 
     if (clientMode === 'new') {
-      finalClientId = `cli-${Date.now()}`;
+      finalClientId = generateUUID();
       newClientObj = {
         id: finalClientId,
         tenant_id: tenant.id,
@@ -129,7 +130,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
       };
     }
 
-    const assetId = `ast-${Date.now()}`;
+    const assetId = generateUUID();
     const newAssetObj: CustomerAsset = {
       id: assetId,
       tenant_id: tenant.id,
@@ -144,7 +145,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
 
     const folio = generateNextFolio(tenant.folio_prefix, existingOrders, tenant.id);
     const order: WorkOrder = {
-      id: `wo-${Date.now()}`,
+      id: generateUUID(),
       tenant_id: tenant.id,
       branch_id: branchId,
       folio,
@@ -192,7 +193,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
       <div className="w-full max-w-3xl rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-2xl my-8">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#D8E4EC]">
           <div>
-            <h2 id="new-order-title" className="text-base font-bold text-slate-900">
+            <h2 id="new-order-title" className="text-base font-semibold text-slate-900">
               {initialPrefill?.sourceAppointmentId
                 ? `Convertir Cita en Orden de Trabajo — ${tenant.name}`
                 : `Ingreso Rápido de Orden de Trabajo — ${tenant.name}`}
@@ -205,7 +206,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
             type="button"
             onClick={onClose}
             aria-label="Cerrar modal de nueva orden"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            className="rounded-xl p-1.5 text-slate-400 hover:bg-[#F4F6FB] hover:text-slate-700 transition-colors"
           >
             <X className="h-5 w-5" />
           </button>
@@ -221,7 +222,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
               <select
                 value={branchId}
                 onChange={(e) => setBranchId(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               >
                 {tenantBranches.map((b) => (
                   <option key={b.id} value={b.id}>
@@ -234,13 +235,13 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 Modalidad del Servicio
               </label>
-              <div className="grid grid-cols-2 gap-2 p-1 bg-slate-100 rounded-lg">
+              <div className="grid grid-cols-2 gap-1.5 p-1 bg-[#F4F6FB] border border-[#D8E4EC]/70 rounded-xl">
                 <button
                   type="button"
                   onClick={() => setModality('workshop')}
-                  className={`py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                  className={`py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                     modality === 'workshop'
-                      ? 'bg-white text-slate-900 shadow-sm'
+                      ? 'bg-[#0A2463] text-white shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -249,9 +250,9 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setModality('home_service')}
-                  className={`py-1.5 text-xs font-semibold rounded-md transition-colors ${
+                  className={`py-1.5 text-xs font-semibold rounded-lg transition-colors ${
                     modality === 'home_service'
-                      ? 'bg-white text-slate-900 shadow-sm'
+                      ? 'bg-[#0A2463] text-white shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -262,7 +263,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
           </div>
 
           {modality === 'home_service' && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-lg bg-cyan-50/60 border border-cyan-200 p-3.5">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 rounded-xl bg-[#EBF4FA]/70 border border-[#3E92CC]/30 p-3.5">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Dirección de Visita en Terreno
@@ -272,7 +273,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                   value={visitAddress}
                   onChange={(e) => setVisitAddress(e.target.value)}
                   placeholder="Ej: Av. Alemania 540, Oficina 3"
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                  className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
               </div>
               <div>
@@ -283,24 +284,24 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                   type="datetime-local"
                   value={visitScheduledAt}
                   onChange={(e) => setVisitScheduledAt(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                  className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
               </div>
             </div>
           )}
 
           {/* Client Section */}
-          <div className="border-t border-slate-200 pt-4">
+          <div className="border-t border-[#D8E4EC]/70 pt-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xs font-bold text-slate-900">1. Datos del Cliente</h3>
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
+              <h3 className="text-xs font-semibold text-slate-900">1. Datos del Cliente</h3>
+              <div className="flex items-center gap-1 bg-[#F4F6FB] border border-[#D8E4EC]/70 p-1 rounded-xl">
                 <button
                   type="button"
                   onClick={() => setClientMode('existing')}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
                     clientMode === 'existing'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600'
+                      ? 'bg-[#0A2463] text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   Cliente Existente
@@ -308,10 +309,10 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 <button
                   type="button"
                   onClick={() => setClientMode('new')}
-                  className={`px-2.5 py-1 text-xs font-semibold rounded-md ${
+                  className={`px-2.5 py-1 text-xs font-semibold rounded-lg transition-colors ${
                     clientMode === 'new'
-                      ? 'bg-white text-slate-900 shadow-sm'
-                      : 'text-slate-600'
+                      ? 'bg-[#0A2463] text-white shadow-sm'
+                      : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
                   + Nuevo Cliente
@@ -324,7 +325,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 <select
                   value={selectedClientId}
                   onChange={(e) => setSelectedClientId(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                  className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 >
                   {tenantClients.map((c) => (
                     <option key={c.id} value={c.id}>
@@ -347,7 +348,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                           setPasswordPattern(a.password_pattern ?? '');
                           setCustomAttrs(a.custom_attributes);
                         }}
-                        className="rounded border border-slate-300 bg-slate-50 px-2 py-0.5 font-medium text-blue-700 hover:bg-blue-50"
+                        className="rounded-lg border border-[#3E92CC]/30 bg-[#EBF4FA] px-2.5 py-1 font-medium text-[#0A2463] hover:bg-[#3E92CC]/15 transition-colors"
                       >
                         Usar {a.brand} {a.model} ({a.serial_imei})
                       </button>
@@ -363,43 +364,43 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                   value={clientName}
                   onChange={(e) => setClientName(e.target.value)}
                   placeholder="Nombre completo / Razón social *"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
                   value={clientRut}
                   onChange={(e) => setClientRut(e.target.value)}
                   placeholder="RUT / ID Tributario"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
                   value={clientPhone}
                   onChange={(e) => setClientPhone(e.target.value)}
                   placeholder="Teléfono WhatsApp (Ej: +56 9 8765 4321)"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="email"
                   value={clientEmail}
                   onChange={(e) => setClientEmail(e.target.value)}
                   placeholder="Correo electrónico"
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
                 <input
                   type="text"
                   value={clientAddress}
                   onChange={(e) => setClientAddress(e.target.value)}
                   placeholder="Dirección"
-                  className="sm:col-span-2 rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                  className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 />
               </div>
             )}
           </div>
 
           {/* Equipment + Dynamic Sector Attributes */}
-          <div className="border-t border-slate-200 pt-4 space-y-3">
-            <h3 className="text-xs font-bold text-slate-900">
+          <div className="border-t border-[#D8E4EC]/70 pt-4 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-900">
               2. Equipo / Activo ({tenant.sector})
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -408,7 +409,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 placeholder="Categoría (Notebook, Smartphone...)"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
               <input
                 type="text"
@@ -416,7 +417,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 value={brand}
                 onChange={(e) => setBrand(e.target.value)}
                 placeholder="Marca *"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
               <input
                 type="text"
@@ -424,32 +425,32 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 value={model}
                 onChange={(e) => setModel(e.target.value)}
                 placeholder="Modelo *"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
               <input
                 type="text"
                 value={serialImei}
                 onChange={(e) => setSerialImei(e.target.value)}
                 placeholder="N° de Serie / IMEI"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
               <input
                 type="text"
                 value={passwordPattern}
                 onChange={(e) => setPasswordPattern(e.target.value)}
                 placeholder="Clave / Patrón desbloqueo"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
               <input
                 type="text"
                 value={technician}
                 onChange={(e) => setTechnician(e.target.value)}
                 placeholder="Técnico asignado"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-lg bg-slate-50 border border-slate-200 p-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 p-3.5">
               {sectorFields.map((field) => (
                 <div key={field.key}>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">
@@ -465,7 +466,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                       }))
                     }
                     placeholder={field.placeholder}
-                    className="w-full rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs focus:border-blue-600 focus:outline-none"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
               ))}
@@ -473,8 +474,8 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
           </div>
 
           {/* Symptoms & Accessories */}
-          <div className="border-t border-slate-200 pt-4 space-y-3">
-            <h3 className="text-xs font-bold text-slate-900">
+          <div className="border-t border-[#D8E4EC]/70 pt-4 space-y-3">
+            <h3 className="text-xs font-semibold text-slate-900">
               3. Recepción y Síntomas Reportados
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -483,14 +484,14 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 value={accessories}
                 onChange={(e) => setAccessories(e.target.value)}
                 placeholder="Accesorios recibidos (cargador, funda, cables...)"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
               <input
                 type="text"
                 value={entryCondition}
                 onChange={(e) => setEntryCondition(e.target.value)}
                 placeholder="Estado físico / estético de entrada"
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
             </div>
             <div>
@@ -503,7 +504,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                 value={symptoms}
                 onChange={(e) => setSymptoms(e.target.value)}
                 placeholder="Describe detalladamente la falla que reporta el cliente..."
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-600 focus:outline-none"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
             </div>
           </div>

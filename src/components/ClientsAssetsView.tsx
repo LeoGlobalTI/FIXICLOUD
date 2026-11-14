@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { Laptop, Plus, Search, User, Wrench } from 'lucide-react';
 import type { Client, CustomerAsset, Tenant, WorkOrder } from '../types/erp';
 import { ORDER_STATUS_META } from '../utils/erpLogic';
+import { generateUUID } from '../utils/uuid';
 
 interface ClientsAssetsViewProps {
   tenant: Tenant;
@@ -62,7 +63,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
     e.preventDefault();
     if (!name.trim()) return;
     const newClient: Client = {
-      id: `cli-${Date.now()}`,
+      id: generateUUID(),
       tenant_id: tenant.id,
       name: name.trim(),
       rut: rut.trim() || 'S/R',
@@ -83,14 +84,17 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <h1 className="font-display text-2xl font-semibold text-slate-900">
+          <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-slate-900">
             Clientes y Parque de Equipos — {tenant.name}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Directorio unificado de clientes e historial técnico por número de serie o IMEI.
+            <span className="font-mono font-semibold text-slate-700 tabular-nums">
+              {tenantClients.length}
+            </span>{' '}
+            cliente(s) registrados con historial técnico por número de serie o IMEI.
           </p>
         </div>
         <button
@@ -106,9 +110,9 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
       {showCreate && (
         <form
           onSubmit={handleCreateClient}
-          className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-3"
+          className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4"
         >
-          <h2 className="text-sm font-bold text-slate-900">Registrar Cliente</h2>
+          <h2 className="text-sm font-semibold text-slate-900">Registrar Cliente</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <input
               type="text"
@@ -116,55 +120,55 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Nombre completo / Razón Social *"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
             <input
               type="text"
               value={rut}
               onChange={(e) => setRut(e.target.value)}
               placeholder="RUT / ID Tributario"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
             <input
               type="text"
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="Teléfono WhatsApp"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono"
+              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Email"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
             <input
               type="text"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               placeholder="Dirección"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
             <input
               type="text"
               value={city}
               onChange={(e) => setCity(e.target.value)}
               placeholder="Ciudad"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-xs"
+              className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
             />
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex justify-end gap-2 pt-2 border-t border-[#D8E4EC]/60">
             <button
               type="button"
               onClick={() => setShowCreate(false)}
-              className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700"
+              className="rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3.5 py-2 text-xs font-semibold text-slate-700 transition-colors"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-semibold text-white"
+              className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white transition-colors"
             >
               Guardar Cliente
             </button>
@@ -183,12 +187,12 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Buscar cliente, RUT, teléfono o N° Serie..."
-                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] pl-9 pr-3 py-2 text-xs focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] pl-9 pr-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
             </div>
           </div>
 
-          <div className="divide-y divide-slate-100 max-h-[600px] overflow-y-auto">
+          <div className="divide-y divide-[#D8E4EC]/50 max-h-[600px] overflow-y-auto">
             {tenantClients.length === 0 ? (
               <div className="p-6 text-center text-xs text-slate-500">
                 No hay clientes que coincidan con la búsqueda.
@@ -203,24 +207,24 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                     key={client.id}
                     type="button"
                     onClick={() => setSelectedClientId(client.id)}
-                    className={`w-full text-left px-4 py-3 transition-colors ${
+                    className={`w-full text-left px-4 py-3 border-l-4 transition-colors ${
                       isSelected
-                        ? 'bg-blue-50/80 ring-1 ring-inset ring-blue-200'
-                        : 'hover:bg-slate-50'
+                        ? 'border-l-[#3E92CC] bg-[#EBF4FA]/75'
+                        : 'border-l-transparent hover:bg-[#F4F6FB]'
                     }`}
                   >
                     <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-bold text-slate-900 truncate">
+                      <span className="text-xs font-semibold text-slate-900 truncate">
                         {client.name}
                       </span>
-                      <span className="font-mono text-[11px] text-slate-500 shrink-0">
+                      <span className="font-mono text-[11px] font-medium text-[#0A2463] shrink-0">
                         {client.rut}
                       </span>
                     </div>
                     <div className="mt-1 text-[11px] text-slate-600 font-mono">
                       {client.phone} · {client.city}
                     </div>
-                    <div className="mt-1 text-[11px] text-cyan-700 font-medium">
+                    <div className="mt-1 text-[11px] text-[#3E92CC] font-semibold">
                       {countAssets} equipo(s) · {countOrders} orden(es)
                     </div>
                   </button>
@@ -240,20 +244,22 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
             <>
               <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6">
                 <div className="flex items-start gap-3">
-                  <div className="h-10 w-10 rounded-xl bg-[#0A2463] text-white flex items-center justify-center shrink-0">
-                    <User className="h-5 w-5" />
+                  <div className="h-11 w-11 rounded-xl bg-[#0A2463] text-white flex items-center justify-center shrink-0">
+                    <User className="h-5 w-5 text-[#6EC1F8]" />
                   </div>
                   <div className="min-w-0">
                     <h2 className="text-base font-semibold text-slate-900">
                       {activeClient.name}
                     </h2>
                     <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
-                      <span className="font-mono">RUT: {activeClient.rut}</span>
-                      <span>·</span>
+                      <span className="font-mono text-[#0A2463] font-medium">
+                        RUT: {activeClient.rut}
+                      </span>
+                      <span className="text-slate-300">·</span>
                       <span className="font-mono">{activeClient.phone}</span>
                       {activeClient.email && (
                         <>
-                          <span>·</span>
+                          <span className="text-slate-300">·</span>
                           <span>{activeClient.email}</span>
                         </>
                       )}
@@ -267,7 +273,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
               </div>
 
               <div className="space-y-3">
-                <h3 className="text-xs font-semibold text-slate-800">
+                <h3 className="text-xs font-semibold text-slate-700 px-1">
                   Parque de Equipos e Historial por N° de Serie ({activeClientAssets.length})
                 </h3>
                 {activeClientAssets.length === 0 ? (
@@ -282,9 +288,11 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                         key={asset.id}
                         className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 space-y-3"
                       >
-                        <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#D8E4EC]/60">
+                        <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-[#D8E4EC]/60">
                           <div className="flex items-center gap-2">
-                            <Laptop className="h-4 w-4 text-[#3E92CC]" />
+                            <div className="h-8 w-8 rounded-lg bg-[#EBF4FA] border border-[#3E92CC]/25 text-[#3E92CC] flex items-center justify-center shrink-0">
+                              <Laptop className="h-4 w-4" />
+                            </div>
                             <span className="text-sm font-semibold text-slate-900">
                               {asset.category} {asset.brand} {asset.model}
                             </span>
@@ -306,7 +314,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                           </div>
                         )}
 
-                        <div className="space-y-1.5">
+                        <div className="space-y-2">
                           <div className="text-[11px] font-semibold text-slate-500">
                             Historial de Órdenes ({assetOrders.length})
                           </div>
@@ -315,20 +323,20 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                             return (
                               <div
                                 key={ord.id}
-                                className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-slate-50 border border-slate-200 px-3 py-2 text-xs"
+                                className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 px-3.5 py-2.5 text-xs"
                               >
                                 <div className="min-w-0 flex-1">
-                                  <div className="flex items-center gap-2">
-                                    <Wrench className="h-3.5 w-3.5 text-slate-400" />
-                                    <span className="font-mono font-bold text-blue-700">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Wrench className="h-3.5 w-3.5 text-[#3E92CC]" />
+                                    <span className="font-mono font-bold text-[#0A2463]">
                                       {ord.folio}
                                     </span>
-                                    <span className="text-slate-400">·</span>
-                                    <span className={`font-medium ${meta.textColor}`}>
+                                    <span className="text-slate-300">·</span>
+                                    <span className={`font-semibold ${meta.textColor}`}>
                                       {meta.label}
                                     </span>
-                                    <span className="text-slate-400">·</span>
-                                    <span className="font-mono text-[11px] text-slate-500">
+                                    <span className="text-slate-300">·</span>
+                                    <span className="font-mono text-[11px] text-slate-500 tabular-nums">
                                       {new Date(ord.created_at).toLocaleDateString('es-CL')}
                                     </span>
                                   </div>
@@ -339,7 +347,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                                 <button
                                   type="button"
                                   onClick={() => onOpenOrder(ord.id)}
-                                  className="rounded-md bg-white border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-800 hover:bg-blue-50 hover:text-blue-700 shrink-0"
+                                  className="rounded-xl bg-white border border-[#D8E4EC] px-3 py-1.5 text-[11px] font-semibold text-[#0A2463] hover:bg-[#EBF4FA] hover:border-[#3E92CC] shrink-0 transition-colors"
                                 >
                                   Abrir en Consola
                                 </button>

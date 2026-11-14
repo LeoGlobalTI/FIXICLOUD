@@ -6,6 +6,7 @@ import type {
   WorkOrder,
 } from '../types/erp';
 import { generateNextFolio, generateTrackingCode } from './erpLogic';
+import { generateUUID } from './uuid';
 
 export interface LegacyMdbRecord {
   legacyId: string;
@@ -353,7 +354,7 @@ export function executeLegacyMigration(
 
     if (!client) {
       client = {
-        id: `cli-mdb-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        id: generateUUID(),
         tenant_id: options.tenantId,
         name: rec.clientName,
         rut: rec.clientRut || 'S/R',
@@ -367,7 +368,7 @@ export function executeLegacyMigration(
     }
 
     const asset: CustomerAsset = {
-      id: `ast-mdb-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: generateUUID(),
       tenant_id: options.tenantId,
       client_id: client.id,
       category: rec.category,
@@ -380,10 +381,10 @@ export function executeLegacyMigration(
 
     const folio = generateNextFolio(prefix, nextOrders, options.tenantId);
     const createdIso = `${rec.entryDate}T10:00:00Z`;
-    const photos = row.matchedPhotos.map((ph, idx) => {
+    const photos = row.matchedPhotos.map((ph) => {
       attachedPhotos++;
       return {
-        id: `ph-mdb-${Date.now()}-${idx}`,
+        id: generateUUID(),
         url: ph.dataUrl,
         stage: 'reception' as const,
         caption: `Importado de /Imagenes/: ${ph.name} (${rec.legacyId})`,
@@ -392,7 +393,7 @@ export function executeLegacyMigration(
     });
 
     const newOrder: WorkOrder = {
-      id: `wo-mdb-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      id: generateUUID(),
       tenant_id: options.tenantId,
       branch_id: options.branchId,
       folio,
@@ -414,7 +415,7 @@ export function executeLegacyMigration(
         rec.totalAmount > 0
           ? [
               {
-                id: `item-mdb-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                id: generateUUID(),
                 source: 'free',
                 description: `Reparación histórica (${rec.legacyId})`,
                 qty: 1,
@@ -426,7 +427,7 @@ export function executeLegacyMigration(
         rec.paidAmount > 0
           ? [
               {
-                id: `pay-mdb-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+                id: generateUUID(),
                 date: rec.entryDate,
                 amount: rec.paidAmount,
                 method: 'cash',

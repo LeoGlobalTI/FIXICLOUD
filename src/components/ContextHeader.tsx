@@ -5,13 +5,16 @@ import {
   Calendar,
   CheckCircle2,
   Database,
+  LogIn,
   MapPin,
   Menu,
   Search,
+  UserCheck,
   X,
 } from 'lucide-react';
 import type {
   Appointment,
+  AuthSessionUser,
   Branch,
   CatalogItem,
   NavSection,
@@ -30,6 +33,8 @@ interface ContextHeaderProps {
   onSubmitGlobalSearch: (q: string) => void;
   supabaseConfig: SupabaseConfig;
   onOpenSupabaseModal: () => void;
+  authSession: AuthSessionUser | null;
+  onOpenAuthModal: () => void;
   lowStockItems: CatalogItem[];
   readyOrders: WorkOrder[];
   scheduledAppointments: Appointment[];
@@ -43,7 +48,7 @@ const SECTION_TITLES: Record<NavSection, string> = {
   appointments: 'Agenda & Domicilios',
   clients: 'Clientes y Parque de Equipos',
   inventory: 'Stock & Préstamos',
-  settings: 'Configuración y Sucursales',
+  settings: 'Configuración y Usuarios',
   migration: 'Migrador Legacy .mdb',
   track: 'Portal Público (/track)',
 };
@@ -59,6 +64,8 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
   onSubmitGlobalSearch,
   supabaseConfig,
   onOpenSupabaseModal,
+  authSession,
+  onOpenAuthModal,
   lowStockItems,
   readyOrders,
   scheduledAppointments,
@@ -68,6 +75,12 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
   const [showAlerts, setShowAlerts] = useState(false);
 
   const tenantBranches = branches.filter((b) => b.tenant_id === activeTenantId);
+  const isBranchLockedBySession = Boolean(
+    authSession && authSession.role !== 'superadmin' && authSession.branch_id
+  );
+  const visibleBranches = isBranchLockedBySession
+    ? tenantBranches.filter((b) => b.id === authSession?.branch_id)
+    : tenantBranches;
   const totalAlerts =
     lowStockItems.length + readyOrders.length + scheduledAppointments.length;
   const isLive = supabaseConfig.connected && !supabaseConfig.demoMode;
@@ -103,11 +116,14 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
             <select
               id="branch-selector"
               value={activeBranchId}
+              disabled={isBranchLockedBySession}
               onChange={(e) => onSelectBranch(e.target.value)}
-              className="bg-transparent text-xs font-medium text-slate-800 focus:outline-none max-w-[180px] truncate cursor-pointer"
+              className="bg-transparent text-xs font-medium text-slate-800 focus:outline-none max-w-[180px] truncate cursor-pointer disabled:cursor-default"
             >
-              <option value="ALL">Casa Matriz — Todas</option>
-              {tenantBranches.map((b) => (
+              {!isBranchLockedBySession && (
+                <option value="ALL">Casa Matriz — Todas</option>
+              )}
+              {visibleBranches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.is_hq ? `${b.name} [HQ]` : b.name}
                 </option>
@@ -117,10 +133,10 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
         </div>
 
         {/* Right: Global Search + Notification Bell + Supabase/Demo Status */}
-        <div className="flex items-center gap-2.5 w-full lg:w-auto justify-end">
+        <div className="flex items-center gap-2 w-full lg:w-auto justify-end min-w-0">
           <form
             onSubmit={handleSearchSubmit}
-            className="relative flex-1 sm:flex-initial sm:w-64 lg:w-72"
+            className="relative flex-1 min-w-0 sm:flex-initial sm:w-64 lg:w-72"
           >
             <Search className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
             <input
@@ -165,7 +181,7 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
                   onClick={() => setShowAlerts(false)}
                   aria-hidden="true"
                 />
-                <div className="absolute right-0 mt-2 w-80 rounded-2xl bg-white border border-[#D8E4EC] shadow-xl z-40 overflow-hidden">
+                <div className="absolute right-0 mt-2 w-[min(20rem,calc(100vw-2rem))] rounded-2xl bg-white border border-[#D8E4EC] shadow-xl z-40 overflow-hidden">
                   <div className="px-4 py-3 border-b border-[#D8E4EC] flex items-center justify-between">
                     <span className="text-xs font-semibold text-slate-900">
                       Alertas Operativas ({totalAlerts})
@@ -257,11 +273,33 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
             )}
           </div>
 
+          {/* User Auth Session Pill */}
+          <button
+            type="button"
+            onClick={onOpenAuthModal}
+            aria-label={authSession ? `Usuario activo @${authSession.username}` : 'Iniciar Sesión'}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 sm:px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+              authSession
+                ? 'bg-[#0A2463] border-[#0A2463] text-white hover:bg-[#1E3A8A]'
+                : 'bg-white border-[#D8E4EC] text-[#0A2463] hover:bg-[#F4F6FB]'
+            }`}
+          >
+            {authSession ? (
+              <UserCheck className="h-3.5 w-3.5 shrink-0 text-[#6EE7D8]" />
+            ) : (
+              <LogIn className="h-3.5 w-3.5 shrink-0 text-[#3E92CC]" />
+            )}
+            <span className="hidden sm:inline font-mono">
+              {authSession ? `@${authSession.username}` : 'Iniciar Sesión'}
+            </span>
+          </button>
+
           {/* Supabase / Demo Status Pill */}
           <button
             type="button"
             onClick={onOpenSupabaseModal}
-            className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
+            aria-label={isLive ? 'Supabase Live' : 'Demo Local'}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 sm:px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
               isLive
                 ? 'bg-[#EBF8F6] border-[#1B998B]/40 text-[#1B998B] hover:bg-[#1B998B]/15'
                 : 'bg-[#EBF4FA] border-[#D8E4EC] text-[#0A2463] hover:bg-[#D8E4EC]/50'

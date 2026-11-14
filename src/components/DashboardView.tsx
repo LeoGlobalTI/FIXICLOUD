@@ -124,9 +124,9 @@ function getSectorIconMeta(sector: IndustrySector) {
 }
 
 const DEMO_GREETING_NAME: Record<RoleType, string> = {
-  superadmin: 'Sofía',
-  admin: 'Rodrigo',
-  receptionist: 'Camila',
+  superadmin: 'SuperAdmin',
+  admin: 'Carolina',
+  receptionist: 'Valentina',
   technician: 'Diego',
 };
 
@@ -206,7 +206,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const SectorIcon = sectorMeta.Icon;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {/* Welcome Row */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
