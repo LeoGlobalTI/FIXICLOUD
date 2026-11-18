@@ -1,21 +1,18 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   ArrowUpRight,
   CalendarClock,
   ChevronDown,
   ChevronRight,
-  Cpu,
   Database,
   DatabaseZap,
   FileText,
   FolderKanban,
-  Laptop,
   MessageCircle,
   MoreVertical,
   Plus,
   Printer,
   Settings,
-  Smartphone,
   TrendingUp,
   Users,
   Wrench,
@@ -27,14 +24,19 @@ import type {
   CatalogItem,
   Client,
   CustomerAsset,
-  IndustrySector,
   LoanAsset,
-  OrderStatus,
   RoleType,
   Tenant,
   WorkOrder,
 } from '../types/erp';
-import { calculateOrderFinancials, formatCurrency } from '../utils/erpLogic';
+import {
+  ORDER_STATUS_META,
+  calculateOrderFinancials,
+  canViewGlobalScope,
+  formatCurrency,
+  getRolePermissions,
+} from '../utils/erpLogic';
+import { getSectorIconMeta } from '../utils/sectorMeta';
 
 interface DashboardViewProps {
   tenant: Tenant;
@@ -59,76 +61,7 @@ interface DashboardViewProps {
   onOpenSupabaseModal: () => void;
 }
 
-const STAGE_PROGRESS: Record<OrderStatus, number> = {
-  received: 20,
-  diagnosing: 40,
-  waiting_approval: 55,
-  in_repair: 75,
-  ready: 90,
-  delivered: 100,
-};
 
-const STATUS_PILL_MAP: Record<
-  OrderStatus,
-  { label: string; classes: string }
-> = {
-  received: {
-    label: 'Recibido',
-    classes: 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]',
-  },
-  diagnosing: {
-    label: 'Diagnóstico',
-    classes: 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]',
-  },
-  waiting_approval: {
-    label: 'Esperando Aprobación',
-    classes: 'bg-amber-50 text-amber-700 border border-amber-200',
-  },
-  in_repair: {
-    label: 'En Proceso',
-    classes: 'bg-[#EBF4FA] text-[#3E92CC] border border-[#3E92CC]/25',
-  },
-  ready: {
-    label: 'Listo / Revisión',
-    classes: 'bg-[#EBF8F6] text-[#1B998B] border border-[#1B998B]/25',
-  },
-  delivered: {
-    label: 'Entregado',
-    classes: 'bg-[#EBF8F6] text-[#157A6E] border border-[#1B998B]/30',
-  },
-};
-
-function getSectorIconMeta(sector: IndustrySector) {
-  switch (sector) {
-    case 'mobile':
-      return {
-        bg: 'bg-violet-50 text-violet-600 border-violet-200/70',
-        Icon: Smartphone,
-      };
-    case 'machinery':
-      return {
-        bg: 'bg-[#EBF8F6] text-[#1B998B] border-[#1B998B]/25',
-        Icon: Wrench,
-      };
-    case 'appliances':
-      return {
-        bg: 'bg-amber-50 text-amber-600 border-amber-200/70',
-        Icon: Cpu,
-      };
-    default:
-      return {
-        bg: 'bg-[#EBF4FA] text-[#3E92CC] border-[#3E92CC]/25',
-        Icon: Laptop,
-      };
-  }
-}
-
-const DEMO_GREETING_NAME: Record<RoleType, string> = {
-  superadmin: 'SuperAdmin',
-  admin: 'Carolina',
-  receptionist: 'Valentina',
-  technician: 'Diego',
-};
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   tenant,
@@ -154,53 +87,80 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const [showSplitMenu, setShowSplitMenu] = useState(false);
   const [openRowMenuId, setOpenRowMenuId] = useState<string | null>(null);
 
-  const scopedOrders = orders.filter(
-    (o) =>
-      o.tenant_id === tenant.id &&
-      (activeBranchId === 'ALL' || o.branch_id === activeBranchId)
+  const scopedOrders = useMemo(
+    () =>
+      orders.filter(
+        (o) =>
+          o.tenant_id === tenant.id &&
+          (activeBranchId === 'ALL' || o.branch_id === activeBranchId)
+      ),
+    [orders, tenant.id, activeBranchId]
   );
-  const scopedAppointments = appointments.filter(
-    (a) =>
-      a.tenant_id === tenant.id &&
-      (activeBranchId === 'ALL' || a.branch_id === activeBranchId) &&
-      a.status === 'scheduled'
+  const scopedAppointments = useMemo(
+    () =>
+      appointments.filter(
+        (a) =>
+          a.tenant_id === tenant.id &&
+          (activeBranchId === 'ALL' || a.branch_id === activeBranchId) &&
+          a.status === 'scheduled'
+      ),
+    [appointments, tenant.id, activeBranchId]
   );
-  const scopedCatalog = catalogItems.filter(
-    (c) =>
-      c.tenant_id === tenant.id &&
-      (activeBranchId === 'ALL' || c.branch_id === activeBranchId)
+  const scopedCatalog = useMemo(
+    () =>
+      catalogItems.filter(
+        (c) =>
+          c.tenant_id === tenant.id &&
+          (activeBranchId === 'ALL' || c.branch_id === activeBranchId)
+      ),
+    [catalogItems, tenant.id, activeBranchId]
   );
 
-  const activeInWorkshop = scopedOrders.filter((o) => o.status !== 'delivered');
-  const completedOrReady = scopedOrders.filter(
-    (o) => o.status === 'ready' || o.status === 'delivered'
+  const activeInWorkshop = useMemo(
+    () => scopedOrders.filter((o) => o.status !== 'delivered'),
+    [scopedOrders]
   );
-  const readyForPickup = scopedOrders.filter((o) => o.status === 'ready');
-  const lowStockCount = scopedCatalog.filter((c) => c.stock_qty <= c.min_stock).length;
+  const completedOrReady = useMemo(
+    () => scopedOrders.filter((o) => o.status === 'ready' || o.status === 'delivered'),
+    [scopedOrders]
+  );
+  const readyForPickup = useMemo(
+    () => scopedOrders.filter((o) => o.status === 'ready'),
+    [scopedOrders]
+  );
+  const lowStockCount = useMemo(
+    () => scopedCatalog.filter((c) => c.stock_qty <= c.min_stock).length,
+    [scopedCatalog]
+  );
+
+  const perms = getRolePermissions(activeRole);
+  const canManageAdminArea = perms.canEditSettings || activeRole === 'superadmin';
+  const canOpenSupabaseConfig = canViewGlobalScope(activeRole, authSession?.role);
 
   const successRate =
     scopedOrders.length > 0
       ? Math.round((completedOrReady.length / scopedOrders.length) * 100)
-      : 84;
+      : 0;
 
   const uniqueTechs = new Set(
     activeInWorkshop.map((o) => o.assigned_technician).filter(Boolean)
   ).size;
   const workshopCapacityPct =
-    scopedOrders.length > 0
-      ? Math.min(96, Math.max(24, Math.round((activeInWorkshop.length / Math.max(1, uniqueTechs * 3)) * 100)))
-      : 62;
+    activeInWorkshop.length > 0
+      ? Math.min(100, Math.round((activeInWorkshop.length / Math.max(1, uniqueTechs * 3)) * 100))
+      : 0;
 
   const upcomingDeliveriesCount = readyForPickup.length + scopedAppointments.length;
 
-  const activeBranch = branches.find((b) => b.id === activeBranchId);
-  const clientMap = new Map(clients.map((c) => [c.id, c]));
-  const assetMap = new Map(assets.map((a) => [a.id, a]));
-  const branchMap = new Map(branches.map((b) => [b.id, b]));
+  const activeBranch = useMemo(
+    () => branches.find((b) => b.id === activeBranchId),
+    [branches, activeBranchId]
+  );
+  const clientMap = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
+  const assetMap = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
+  const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
 
-  const firstName = authSession
-    ? authSession.full_name.trim().split(/\s+/)[0]
-    : DEMO_GREETING_NAME[activeRole];
+  const firstName = authSession?.full_name?.trim().split(/\s+/)[0] || 'Equipo';
 
   const sectorMeta = getSectorIconMeta(tenant.sector);
   const SectorIcon = sectorMeta.Icon;
@@ -225,83 +185,94 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
 
         {/* Split Blue Primary CTA */}
-        <div className="relative inline-flex items-stretch rounded-xl shadow-sm shrink-0">
-          <button
-            type="button"
-            onClick={onNewOrder}
-            className="inline-flex items-center gap-2 rounded-l-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2.5 text-sm font-semibold transition-colors whitespace-nowrap"
-          >
-            <Plus className="h-4 w-4" />
-            <span>Nueva Orden</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowSplitMenu((v) => !v)}
-            aria-label="Más acciones rápidas"
-            aria-expanded={showSplitMenu}
-            className="inline-flex items-center justify-center rounded-r-xl bg-[#3E92CC] hover:bg-[#3178A8] border-l border-white/25 text-white px-2.5 py-2.5 transition-colors"
-          >
-            <ChevronDown className="h-4 w-4" />
-          </button>
+        {perms.canCreateOrder ? (
+          <div className="relative inline-flex items-stretch rounded-xl shadow-sm shrink-0">
+            <button
+              type="button"
+              onClick={onNewOrder}
+              className="inline-flex items-center gap-2 rounded-l-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2.5 text-sm font-semibold transition-colors whitespace-nowrap"
+            >
+              <Plus className="h-4 w-4" />
+              <span>Nueva Orden</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowSplitMenu((v) => !v)}
+              aria-label="Más acciones rápidas"
+              aria-expanded={showSplitMenu}
+              className="inline-flex items-center justify-center rounded-r-xl bg-[#3E92CC] hover:bg-[#3178A8] border-l border-white/25 text-white px-2.5 py-2.5 transition-colors"
+            >
+              <ChevronDown className="h-4 w-4" />
+            </button>
 
-          {showSplitMenu && (
-            <>
-              <div
-                className="fixed inset-0 z-20"
-                onClick={() => setShowSplitMenu(false)}
-                aria-hidden="true"
-              />
-              <div className="absolute right-0 top-full mt-2 w-56 rounded-2xl bg-white border border-[#D8E4EC] shadow-xl py-1.5 z-30">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSplitMenu(false);
-                    onNewOrder();
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
-                >
-                  <Plus className="h-3.5 w-3.5 text-[#3E92CC]" />
-                  <span>Nueva Orden de Trabajo</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSplitMenu(false);
-                    onGoToAppointments();
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
-                >
-                  <CalendarClock className="h-3.5 w-3.5 text-[#1B998B]" />
-                  <span>Agendar Cita / Visita</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowSplitMenu(false);
-                    onGoToConsole();
-                  }}
-                  className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
-                >
-                  <FolderKanban className="h-3.5 w-3.5 text-[#0A2463]" />
-                  <span>Ir a Consola 3 Zonas</span>
-                </button>
-                {scopedOrders[0] && (
+            {showSplitMenu && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => setShowSplitMenu(false)}
+                  aria-hidden="true"
+                />
+                <div className="absolute right-0 top-full mt-2 w-56 rounded-2xl bg-white border border-[#D8E4EC] shadow-xl py-1.5 z-30">
                   <button
                     type="button"
                     onClick={() => {
                       setShowSplitMenu(false);
-                      onOpenPrintOrder(scopedOrders[0].id);
+                      onNewOrder();
                     }}
                     className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
                   >
-                    <FileText className="h-3.5 w-3.5 text-slate-600" />
-                    <span>Emitir Reporte .rpt ({scopedOrders[0].folio})</span>
+                    <Plus className="h-3.5 w-3.5 text-[#3E92CC]" />
+                    <span>Nueva Orden de Trabajo</span>
                   </button>
-                )}
-              </div>
-            </>
-          )}
-        </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSplitMenu(false);
+                      onGoToAppointments();
+                    }}
+                    className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
+                  >
+                    <CalendarClock className="h-3.5 w-3.5 text-[#1B998B]" />
+                    <span>Agendar Cita / Visita</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSplitMenu(false);
+                      onGoToConsole();
+                    }}
+                    className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
+                  >
+                    <FolderKanban className="h-3.5 w-3.5 text-[#0A2463]" />
+                    <span>Ir a Consola 3 Zonas</span>
+                  </button>
+                  {scopedOrders[0] && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowSplitMenu(false);
+                        onOpenPrintOrder(scopedOrders[0].id);
+                      }}
+                      className="w-full px-4 py-2 text-left text-xs font-medium text-slate-800 hover:bg-[#F4F6FB] flex items-center gap-2"
+                    >
+                      <FileText className="h-3.5 w-3.5 text-slate-600" />
+                      <span>Emitir Reporte .rpt ({scopedOrders[0].folio})</span>
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={onGoToConsole}
+            className="inline-flex items-center gap-2 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-4 py-2.5 text-sm font-semibold transition-colors whitespace-nowrap shrink-0 shadow-sm"
+          >
+            <FolderKanban className="h-4 w-4 text-[#6EC1F8]" />
+            <span>Ir a Consola 3 Zonas</span>
+          </button>
+        )}
       </div>
 
       {/* 4 KPI Cards */}
@@ -322,12 +293,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1.5 text-xs">
-            <span className="inline-flex items-center gap-0.5 font-semibold text-[#1B998B]">
+            <span className="inline-flex items-center gap-0.5 font-semibold text-[#3E92CC] tabular-nums">
               <ArrowUpRight className="h-3.5 w-3.5" />
-              12%
+              {scopedOrders.length > 0
+                ? `${Math.round((activeInWorkshop.length / scopedOrders.length) * 100)}%`
+                : '0%'}
             </span>
             <span className="text-slate-500">
-              vs mes anterior ({scopedOrders.length} totales)
+              en proceso ({scopedOrders.length} totales)
             </span>
           </div>
         </div>
@@ -348,12 +321,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-4 flex items-center gap-1.5 text-xs">
-            <span className="inline-flex items-center gap-0.5 font-semibold text-[#1B998B]">
+            <span className="inline-flex items-center gap-0.5 font-semibold text-[#1B998B] tabular-nums">
               <ArrowUpRight className="h-3.5 w-3.5" />
-              +6%
+              {completedOrReady.length}/{scopedOrders.length}
             </span>
             <span className="text-slate-500">
-              {completedOrReady.length} equipos listos o entregados
+              equipos listos o entregados
             </span>
           </div>
         </div>
@@ -375,7 +348,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="mt-4 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs">
             <span className="font-semibold text-[#3E92CC] whitespace-nowrap">
-              {uniqueTechs || 1} técnico(s)
+              {uniqueTechs} técnico(s)
             </span>
             <span className="text-slate-500">en banco activo</span>
           </div>
@@ -436,14 +409,16 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <div className="text-sm font-semibold text-slate-800">
                 No hay órdenes registradas en esta sede
               </div>
-              <button
-                type="button"
-                onClick={onNewOrder}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Ingresar Primera Orden</span>
-              </button>
+              {perms.canCreateOrder && (
+                <button
+                  type="button"
+                  onClick={onNewOrder}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Ingresar Primera Orden</span>
+                </button>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto xl:overflow-visible">
@@ -462,8 +437,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     const client = clientMap.get(order.client_id);
                     const asset = assetMap.get(order.asset_id);
                     const branch = branchMap.get(order.branch_id);
-                    const progress = STAGE_PROGRESS[order.status];
-                    const pill = STATUS_PILL_MAP[order.status];
+                    const statusMeta = ORDER_STATUS_META[order.status];
                     const fin = calculateOrderFinancials(
                       order.items,
                       order.discount_amount,
@@ -518,20 +492,20 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                             <div className="w-14 h-2 rounded-full bg-[#F4F6FB] border border-[#D8E4EC]/60 overflow-hidden shrink-0">
                               <div
                                 className="h-full rounded-full bg-[#3E92CC] transition-all duration-300"
-                                style={{ width: `${progress}%` }}
+                                style={{ width: `${statusMeta.progress}%` }}
                               />
                             </div>
                             <span className="font-mono text-xs font-semibold text-slate-600 tabular-nums w-8 text-right shrink-0">
-                              {progress}%
+                              {statusMeta.progress}%
                             </span>
                           </div>
                         </td>
 
                         <td className="py-3.5 px-2.5 whitespace-nowrap">
                           <span
-                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${pill.classes}`}
+                            className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${statusMeta.pillClasses}`}
                           >
-                            {pill.label}
+                            {statusMeta.label}
                           </span>
                         </td>
 
@@ -613,128 +587,189 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
 
           <div className="divide-y divide-[#D8E4EC]/60">
-            <button
-              type="button"
-              onClick={() => onGoToSettings('company')}
-              className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#3E92CC]">
-                  <Settings className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900">
-                    General
+            {canManageAdminArea ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onGoToSettings('company')}
+                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#3E92CC]">
+                      <Settings className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">
+                        General
+                      </div>
+                      <div className="text-xs text-slate-500 truncate">
+                        Casa Matriz, sucursales, IVA ({tenant.iva_rate}%) y moneda ({tenant.currency})
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    Casa Matriz, sucursales, IVA ({tenant.iva_rate}%) y moneda ({tenant.currency})
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
-            </button>
+                  <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                </button>
 
-            <button
-              type="button"
-              onClick={() => onGoToSettings('users')}
-              className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#0A2463]">
-                  <Users className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Equipo y Roles
+                <button
+                  type="button"
+                  onClick={() => onGoToSettings('users')}
+                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#0A2463]">
+                      <Users className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Equipo y Roles
+                      </div>
+                      <div className="text-xs text-slate-500 truncate">
+                        Usuarios, técnicos y permisos de sede
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    Usuarios, técnicos y permisos de sede
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
-            </button>
+                  <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                </button>
 
-            <div className="px-6 py-4 flex items-center justify-between gap-3">
-              <button
-                type="button"
-                onClick={() => onGoToSettings('company')}
-                className="flex items-center gap-3 min-w-0 text-left group"
-              >
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF8F6] text-[#1B998B]">
-                  <MessageCircle className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900 group-hover:text-[#0A2463]">
-                    Notificaciones WhatsApp
-                  </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    {tenant.whatsapp_enabled
-                      ? 'Envíos y plantillas activas'
-                      : 'Desactivado para esta empresa'}
-                  </div>
-                </div>
-              </button>
+                <div className="px-6 py-4 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onGoToSettings('company')}
+                    className="flex items-center gap-3 min-w-0 text-left group"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF8F6] text-[#1B998B]">
+                      <MessageCircle className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900 group-hover:text-[#0A2463]">
+                        Notificaciones WhatsApp
+                      </div>
+                      <div className="text-xs text-slate-500 truncate">
+                        {tenant.whatsapp_enabled
+                          ? 'Envíos y plantillas activas'
+                          : 'Desactivado para esta empresa'}
+                      </div>
+                    </div>
+                  </button>
 
-              <button
-                type="button"
-                role="switch"
-                aria-checked={tenant.whatsapp_enabled}
-                aria-label="Activar o desactivar notificaciones WhatsApp"
-                onClick={onToggleWhatsApp}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                  tenant.whatsapp_enabled ? 'bg-[#1B998B]' : 'bg-slate-300'
-                }`}
-              >
-                <span
-                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                    tenant.whatsapp_enabled ? 'translate-x-5' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={tenant.whatsapp_enabled}
+                    aria-label="Activar o desactivar notificaciones WhatsApp"
+                    onClick={onToggleWhatsApp}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                      tenant.whatsapp_enabled ? 'bg-[#1B998B]' : 'bg-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        tenant.whatsapp_enabled ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
 
-            <button
-              type="button"
-              onClick={onOpenSupabaseModal}
-              className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#F4F6FB] text-[#0A2463] border border-[#D8E4EC]">
-                  <Database className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Avanzado &amp; BD Supabase
-                  </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    Credenciales, Seed DB y Health Check
-                  </div>
-                </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
-            </button>
+                {canOpenSupabaseConfig && (
+                  <button
+                    type="button"
+                    onClick={onOpenSupabaseModal}
+                    className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#F4F6FB] text-[#0A2463] border border-[#D8E4EC]">
+                        <Database className="h-4 w-4" />
+                      </div>
+                      <div className="min-w-0">
+                        <div className="text-sm font-semibold text-slate-900">
+                          Avanzado &amp; BD Supabase
+                        </div>
+                        <div className="text-xs text-slate-500 truncate">
+                          Credenciales, Seed DB y Health Check
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                  </button>
+                )}
 
-            <button
-              type="button"
-              onClick={onGoToMigration}
-              className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#F4F6FB] text-[#3E92CC] border border-[#D8E4EC]">
-                  <DatabaseZap className="h-4 w-4" />
-                </div>
-                <div className="min-w-0">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Migrador Legacy .mdb
+                <button
+                  type="button"
+                  onClick={onGoToMigration}
+                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#F4F6FB] text-[#3E92CC] border border-[#D8E4EC]">
+                      <DatabaseZap className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Migrador Legacy .mdb
+                      </div>
+                      <div className="text-xs text-slate-500 truncate">
+                        Importar .mdb / CSV · {lowStockCount} alertas stock
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-xs text-slate-500 truncate">
-                    Importar CPRepair.mdb / CSV · {lowStockCount} alertas stock
+                  <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="px-6 py-4 flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#3E92CC]">
+                    <Settings className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Parámetros de Empresa
+                    </div>
+                    <div className="text-xs text-slate-500 truncate">
+                      IVA {tenant.iva_rate}% · Moneda {tenant.currency} · Prefijo {tenant.folio_prefix}
+                    </div>
                   </div>
                 </div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
-            </button>
+
+                <div className="px-6 py-4 flex items-center gap-3">
+                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF8F6] text-[#1B998B]">
+                    <MessageCircle className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-slate-900">
+                      Notificaciones WhatsApp
+                    </div>
+                    <div className="text-xs text-slate-500 truncate">
+                      {tenant.whatsapp_enabled ? 'Activo en empresa' : 'Desactivado por administración'}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onGoToAppointments}
+                  className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#EBF4FA] text-[#0A2463]">
+                      <CalendarClock className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Agenda de Visitas y Taller
+                      </div>
+                      <div className="text-xs text-slate-500 truncate">
+                        {scopedAppointments.length} cita(s) programadas · {lowStockCount} alertas stock
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
+                </button>
+
+                <div className="px-6 py-3.5 bg-[#F4F6FB]/60 text-[11px] text-slate-500">
+                  La edición de empresa, usuarios, WhatsApp y BD Supabase está restringida a Administración.
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>

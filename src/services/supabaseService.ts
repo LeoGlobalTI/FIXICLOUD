@@ -11,7 +11,6 @@ import type {
   LoanAsset,
   PhotoStage,
   SupabaseConfig,
-  TeamProfile,
   Tenant,
   WorkOrder,
   WorkOrderItem,
@@ -20,10 +19,11 @@ import type {
   WorkOrderPhoto,
 } from '../types/erp';
 import { SEED_ERP_STATE } from '../data/seedData';
-import { mapDbRoleToRoleType } from '../utils/erpLogic';
+import { filterErpStateForTenants, mapDbRoleToRoleType } from '../utils/erpLogic';
 import {
   mapAppUserFromDb,
   mapAppUserToDb,
+  mapAppUserUpdateWithoutPasswordToDb,
   mapAppointmentFromDb,
   mapAppointmentToDb,
   mapAssetFromDb,
@@ -41,8 +41,6 @@ import {
   mapOrderLoanFromDb,
   mapOrderPaymentFromDb,
   mapOrderPhotoFromDb,
-  mapProfileFromDb,
-  mapProfileToDb,
   mapTenantFromDb,
   mapTenantToDb,
   mapWorkOrderFromDb,
@@ -51,14 +49,14 @@ import {
   mapWorkOrderPaymentToDb,
   mapWorkOrderPhotoToDb,
   mapWorkOrderToDb,
+  stripOptionalBranchColumns,
 } from '../utils/supabaseMappers';
 import { ensureUUID } from '../utils/uuid';
 
-export const SUPABASE_TABLES = [
+const SUPABASE_TABLES = [
   'tenants',
   'branches',
   'app_users',
-  'profiles',
   'clients',
   'customer_assets',
   'catalog_items',
@@ -71,9 +69,9 @@ export const SUPABASE_TABLES = [
   'appointments',
 ] as const;
 
-export type SupabaseTableName = (typeof SUPABASE_TABLES)[number];
+type SupabaseTableName = (typeof SUPABASE_TABLES)[number];
 
-export interface TableDiagnostic {
+interface TableDiagnostic {
   table: SupabaseTableName;
   ok: boolean;
   count: number;
@@ -84,19 +82,6 @@ export interface SupabaseTestResult {
   success: boolean;
   message: string;
   tables: TableDiagnostic[];
-}
-
-export interface HealthCheckItem {
-  id: string;
-  label: string;
-  ok: boolean;
-  detail: string;
-}
-
-export interface ProductionHealthReport {
-  checkedAt: string;
-  overallOk: boolean;
-  items: HealthCheckItem[];
 }
 
 let cachedClientKey = '';
@@ -119,7 +104,20 @@ function formatPgError(
   return parts.join(' · ');
 }
 
-export function getSupabaseClient(url: string, anonKey: string): SupabaseClient | null {
+function isMissingOptionalBranchColError(err?: {
+  message?: string;
+  code?: string | null;
+} | null): boolean {
+  if (!err) return false;
+  const msg = (err.message ?? '').toLowerCase();
+  return (
+    err.code === 'PGRST204' ||
+    msg.includes('business_hours') ||
+    (msg.includes('city') && msg.includes('branches'))
+  );
+}
+
+function getSupabaseClient(url: string, anonKey: string): SupabaseClient | null {
   const cleanUrl = normalizeUrl(url);
   const cleanKey = anonKey.trim();
   if (!cleanUrl || !cleanKey) return null;
@@ -155,41 +153,43 @@ export async function testSupabaseConnection(
   }
 
   try {
-    const results: TableDiagnostic[] = [];
-    for (const table of SUPABASE_TABLES) {
-      try {
-        const res = await fetch(`${baseUrl}/rest/v1/${table}?select=*&limit=1`, {
-          method: 'GET',
-          headers: {
-            apikey: anonKey.trim(),
-            Authorization: `Bearer ${anonKey.trim()}`,
-            Prefer: 'count=exact',
-          },
-        });
+    const cleanKey = anonKey.trim();
+    const results: TableDiagnostic[] = await Promise.all(
+      SUPABASE_TABLES.map(async (table): Promise<TableDiagnostic> => {
+        try {
+          const res = await fetch(`${baseUrl}/rest/v1/${table}?select=*&limit=1`, {
+            method: 'GET',
+            headers: {
+              apikey: cleanKey,
+              Authorization: `Bearer ${cleanKey}`,
+              Prefer: 'count=exact',
+            },
+          });
 
-        if (!res.ok) {
-          const text = await res.text();
-          results.push({
+          if (!res.ok) {
+            const text = await res.text();
+            return {
+              table,
+              ok: false,
+              count: 0,
+              error: `HTTP ${res.status}: ${text.slice(0, 140)}`,
+            };
+          }
+
+          const range = res.headers.get('content-range');
+          const total =
+            range && range.includes('/') ? Number(range.split('/')[1]) || 0 : 0;
+          return { table, ok: true, count: total };
+        } catch (err) {
+          return {
             table,
             ok: false,
             count: 0,
-            error: `HTTP ${res.status}: ${text.slice(0, 140)}`,
-          });
-          continue;
+            error: err instanceof Error ? err.message : 'Error de red',
+          };
         }
-
-        const range = res.headers.get('content-range');
-        const total = range && range.includes('/') ? Number(range.split('/')[1]) || 0 : 0;
-        results.push({ table, ok: true, count: total });
-      } catch (err) {
-        results.push({
-          table,
-          ok: false,
-          count: 0,
-          error: err instanceof Error ? err.message : 'Error de red',
-        });
-      }
-    }
+      })
+    );
 
     const coreTables = ['tenants', 'branches', 'work_orders', 'catalog_items'];
     const coreOk = results
@@ -201,7 +201,7 @@ export async function testSupabaseConnection(
     if (allOk) {
       return {
         success: true,
-        message: 'Conexión verificada contra todas las 13 tablas de FIXICLOUD en Supabase.',
+        message: `Conexión verificada contra todas las ${SUPABASE_TABLES.length} tablas de FIXICLOUD en Supabase.`,
         tables: results,
       };
     }
@@ -237,74 +237,6 @@ export async function testSupabaseConnection(
   }
 }
 
-export async function runProductionHealthCheck(
-  url: string,
-  anonKey: string
-): Promise<ProductionHealthReport> {
-  const client = getSupabaseClient(url, anonKey);
-  const checkedAt = new Date().toISOString();
-  if (!client) {
-    return {
-      checkedAt,
-      overallOk: false,
-      items: [
-        {
-          id: 'creds',
-          label: 'Credenciales Supabase',
-          ok: false,
-          detail: 'Faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY.',
-        },
-      ],
-    };
-  }
-
-  const items: HealthCheckItem[] = [];
-  const checkTables = ['tenants', 'branches', 'app_users', 'work_orders', 'catalog_items', 'appointments'] as const;
-
-  for (const tbl of checkTables) {
-    const { error, count } = await client
-      .from(tbl)
-      .select('id', { count: 'exact', head: true });
-    items.push({
-      id: `tbl-${tbl}`,
-      label: `Tabla public.${tbl}`,
-      ok: !error,
-      detail: error ? error.message : `OK (${count ?? 0} registros)`,
-    });
-  }
-
-  // Check RPC get_public_order_status
-  const rpcRes = await client.rpc('get_public_order_status', { p_code: '__PING__' });
-  const rpcExists =
-    !rpcRes.error ||
-    !rpcRes.error.message.toLowerCase().includes('could not find the function');
-  items.push({
-    id: 'rpc-track',
-    label: 'RPC get_public_order_status(p_code)',
-    ok: rpcExists,
-    detail: rpcExists
-      ? 'Función RPC activa y accesible para /track'
-      : rpcRes.error?.message ?? 'Función no encontrada',
-  });
-
-  // Check Storage bucket order-photos
-  const bucketRes = await client.storage.from('order-photos').list('', { limit: 1 });
-  items.push({
-    id: 'bucket-photos',
-    label: 'Storage Bucket "order-photos"',
-    ok: !bucketRes.error,
-    detail: !bucketRes.error
-      ? 'Bucket público accesible'
-      : bucketRes.error.message,
-  });
-
-  return {
-    checkedAt,
-    overallOk: items.every((i) => i.ok),
-    items,
-  };
-}
-
 export async function pullSupabaseErpState(
   url: string,
   anonKey: string
@@ -317,7 +249,6 @@ export async function pullSupabaseErpState(
       tenantsRes,
       branchesRes,
       appUsersRes,
-      profilesRes,
       clientsRes,
       assetsRes,
       catalogRes,
@@ -331,8 +262,9 @@ export async function pullSupabaseErpState(
     ] = await Promise.all([
       client.from('tenants').select('*'),
       client.from('branches').select('*'),
-      client.from('app_users').select('*'),
-      client.from('profiles').select('*'),
+      client
+        .from('app_users')
+        .select('id, tenant_id, branch_id, username, full_name, role, is_active, created_at'),
       client.from('clients').select('*'),
       client.from('customer_assets').select('*'),
       client.from('catalog_items').select('*'),
@@ -411,9 +343,6 @@ export async function pullSupabaseErpState(
     const appUsers: AppUser[] = (appUsersRes.data ?? []).map((u) =>
       mapAppUserFromDb(u as Record<string, unknown>)
     );
-    const profiles: TeamProfile[] = (profilesRes.data ?? []).map((p) =>
-      mapProfileFromDb(p as Record<string, unknown>)
-    );
     const clients: Client[] = (clientsRes.data ?? []).map((c) =>
       mapClientFromDb(c as Record<string, unknown>)
     );
@@ -443,7 +372,6 @@ export async function pullSupabaseErpState(
         tenants,
         branches,
         appUsers,
-        profiles,
         clients,
         assets,
         catalogItems,
@@ -460,18 +388,16 @@ export async function pullSupabaseErpState(
   }
 }
 
-export async function seedDemoDataToSupabase(
-  url: string,
-  anonKey: string
+export const ANDESFLEET_TENANT_ID = '33333333-3333-4333-8333-333333333333';
+
+async function upsertErpSubsetToSupabase(
+  client: SupabaseClient,
+  s: ErpState
 ): Promise<{ ok: boolean; failedTable?: string; message: string }> {
-  const client = getSupabaseClient(url, anonKey);
-  if (!client) return { ok: false, message: 'Credenciales inválidas.' };
+  const tenantTaxMap = new Map(s.tenants.map((t) => [ensureUUID(t.id), t.iva_rate]));
 
-  try {
-    const s = SEED_ERP_STATE;
-    const tenantTaxMap = new Map(s.tenants.map((t) => [ensureUUID(t.id), t.iva_rate]));
-
-    // Step 1: public.tenants
+  // Step 1: public.tenants
+  if (s.tenants.length > 0) {
     const tenantRows = s.tenants.map((t) => {
       const tenantOrders = s.workOrders.filter((o) => o.tenant_id === t.id);
       const maxNum = tenantOrders.reduce((acc, o) => {
@@ -490,12 +416,19 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('tenants', tenantsRes.error),
       };
     }
+  }
 
-    // Step 2: public.branches (strictly max 1 is_headquarters = true per tenant)
+  // Step 2: public.branches (strictly max 1 is_headquarters = true per tenant)
+  if (s.branches.length > 0) {
     const branchRows = mapBranchesToDbSafe(s.branches);
-    const branchesRes = await client
+    let branchesRes = await client
       .from('branches')
       .upsert(branchRows, { onConflict: 'id' });
+    if (branchesRes.error && isMissingOptionalBranchColError(branchesRes.error)) {
+      branchesRes = await client
+        .from('branches')
+        .upsert(branchRows.map(stripOptionalBranchColumns), { onConflict: 'id' });
+    }
     if (branchesRes.error) {
       return {
         ok: false,
@@ -503,29 +436,31 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('branches', branchesRes.error),
       };
     }
+  }
 
-    // Step 2b: public.app_users (custom login accounts without Supabase Auth)
-    if (s.appUsers.length > 0) {
-      const appUserRows = s.appUsers.map((u) => mapAppUserToDb(u));
-      const appUsersRes = await client
-        .from('app_users')
-        .upsert(appUserRows, { onConflict: 'id' });
-      if (appUsersRes.error) {
-        return {
-          ok: false,
-          failedTable: 'app_users',
-          message: formatPgError('app_users', appUsersRes.error),
-        };
-      }
+  // Step 2b: public.app_users (custom login accounts without Supabase Auth)
+  if (s.appUsers.length > 0) {
+    const appUserRows = s.appUsers.map((u) => mapAppUserToDb(u));
+    const appUsersRes = await client
+      .from('app_users')
+      .upsert(appUserRows, { onConflict: 'id' });
+    if (appUsersRes.error) {
+      return {
+        ok: false,
+        failedTable: 'app_users',
+        message: formatPgError('app_users', appUsersRes.error),
+      };
     }
+  }
 
-    // Step 3: public.clients, public.catalog_items, public.loan_assets
-    const hqByTenant = new Map<string, string>();
-    for (const b of s.branches) {
-      if (b.is_hq && !hqByTenant.has(b.tenant_id)) {
-        hqByTenant.set(b.tenant_id, b.id);
-      }
+  // Step 3: public.clients, public.catalog_items, public.loan_assets
+  const hqByTenant = new Map<string, string>();
+  for (const b of s.branches) {
+    if (b.is_hq && !hqByTenant.has(b.tenant_id)) {
+      hqByTenant.set(b.tenant_id, b.id);
     }
+  }
+  if (s.clients.length > 0) {
     const clientRows = s.clients.map((c) =>
       mapClientToDb(c, { branchId: hqByTenant.get(c.tenant_id) ?? null })
     );
@@ -539,7 +474,9 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('clients', clientsRes.error),
       };
     }
+  }
 
+  if (s.catalogItems.length > 0) {
     const catalogRows = s.catalogItems.map((item) => mapCatalogItemToDb(item));
     const catalogRes = await client
       .from('catalog_items')
@@ -551,7 +488,9 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('catalog_items', catalogRes.error),
       };
     }
+  }
 
+  if (s.loanAssets.length > 0) {
     const loanAssetRows = s.loanAssets.map((loan) => mapLoanAssetToDb(loan));
     const loanAssetsRes = await client
       .from('loan_assets')
@@ -563,8 +502,10 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('loan_assets', loanAssetsRes.error),
       };
     }
+  }
 
-    // Step 4: public.customer_assets (depends on clients)
+  // Step 4: public.customer_assets (depends on clients)
+  if (s.assets.length > 0) {
     const assetRows = s.assets.map((asset) => mapAssetToDb(asset));
     const assetsRes = await client
       .from('customer_assets')
@@ -576,8 +517,10 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('customer_assets', assetsRes.error),
       };
     }
+  }
 
-    // Step 5: public.work_orders (depends on clients & customer_assets; NO balance_due)
+  // Step 5: public.work_orders (depends on clients & customer_assets; NO balance_due)
+  if (s.workOrders.length > 0) {
     const orderRows = s.workOrders.map((o) =>
       mapWorkOrderToDb(o, tenantTaxMap.get(ensureUUID(o.tenant_id)) ?? 19)
     );
@@ -591,121 +534,134 @@ export async function seedDemoDataToSupabase(
         message: formatPgError('work_orders', woRes.error),
       };
     }
+  }
 
-    // Step 6: Child tables & appointments (depends on work_orders)
-    const catalogTypeMap = new Map(
-      s.catalogItems.map((cat) => [
-        ensureUUID(cat.id),
-        cat.category === 'service' ? ('service' as const) : ('part' as const),
-      ])
+  // Step 6: Child tables & appointments (depends on work_orders)
+  const catalogTypeMap = new Map(
+    s.catalogItems.map((cat) => [
+      ensureUUID(cat.id),
+      cat.category === 'service' ? ('service' as const) : ('part' as const),
+    ])
+  );
+
+  const itemRows = s.workOrders.flatMap((o) =>
+    o.items.map((it) =>
+      mapWorkOrderItemToDb(it, {
+        tenantId: o.tenant_id,
+        workOrderId: o.id,
+        catalogItemType: it.catalog_item_id
+          ? catalogTypeMap.get(ensureUUID(it.catalog_item_id)) ??
+            (it.sku?.startsWith('SRV-') ? 'service' : undefined)
+          : undefined,
+      })
+    )
+  );
+  if (itemRows.length > 0) {
+    const itemsRes = await client
+      .from('work_order_items')
+      .upsert(itemRows, { onConflict: 'id' });
+    if (itemsRes.error) {
+      return {
+        ok: false,
+        failedTable: 'work_order_items',
+        message: formatPgError('work_order_items', itemsRes.error),
+      };
+    }
+  }
+
+  const paymentRows = s.workOrders.flatMap((o) =>
+    o.payments.map((p) =>
+      mapWorkOrderPaymentToDb(p, {
+        tenantId: o.tenant_id,
+        branchId: o.branch_id,
+        workOrderId: o.id,
+      })
+    )
+  );
+  if (paymentRows.length > 0) {
+    const payRes = await client
+      .from('work_order_payments')
+      .upsert(paymentRows, { onConflict: 'id' });
+    if (payRes.error) {
+      return {
+        ok: false,
+        failedTable: 'work_order_payments',
+        message: formatPgError('work_order_payments', payRes.error),
+      };
+    }
+  }
+
+  const photoRows = s.workOrders.flatMap((o) =>
+    o.photos.map((ph) =>
+      mapWorkOrderPhotoToDb(ph, {
+        tenantId: o.tenant_id,
+        workOrderId: o.id,
+      })
+    )
+  );
+  if (photoRows.length > 0) {
+    const phRes = await client
+      .from('work_order_photos')
+      .upsert(photoRows, { onConflict: 'id' });
+    if (phRes.error) {
+      return {
+        ok: false,
+        failedTable: 'work_order_photos',
+        message: formatPgError('work_order_photos', phRes.error),
+      };
+    }
+  }
+
+  const loanRows = s.workOrders
+    .filter((o) => Boolean(o.loan))
+    .map((o) =>
+      mapWorkOrderLoanToDb(o.loan!, {
+        tenantId: o.tenant_id,
+        workOrderId: o.id,
+      })
     );
-
-    const itemRows = s.workOrders.flatMap((o) =>
-      o.items.map((it) =>
-        mapWorkOrderItemToDb(it, {
-          tenantId: o.tenant_id,
-          workOrderId: o.id,
-          catalogItemType: it.catalog_item_id
-            ? catalogTypeMap.get(ensureUUID(it.catalog_item_id))
-            : undefined,
-        })
-      )
-    );
-    if (itemRows.length > 0) {
-      const itemsRes = await client
-        .from('work_order_items')
-        .upsert(itemRows, { onConflict: 'id' });
-      if (itemsRes.error) {
-        return {
-          ok: false,
-          failedTable: 'work_order_items',
-          message: formatPgError('work_order_items', itemsRes.error),
-        };
-      }
+  if (loanRows.length > 0) {
+    const wlRes = await client
+      .from('work_order_loans')
+      .upsert(loanRows, { onConflict: 'id' });
+    if (wlRes.error) {
+      return {
+        ok: false,
+        failedTable: 'work_order_loans',
+        message: formatPgError('work_order_loans', wlRes.error),
+      };
     }
+  }
 
-    const paymentRows = s.workOrders.flatMap((o) =>
-      o.payments.map((p) =>
-        mapWorkOrderPaymentToDb(p, {
-          tenantId: o.tenant_id,
-          branchId: o.branch_id,
-          workOrderId: o.id,
-        })
-      )
-    );
-    if (paymentRows.length > 0) {
-      const payRes = await client
-        .from('work_order_payments')
-        .upsert(paymentRows, { onConflict: 'id' });
-      if (payRes.error) {
-        return {
-          ok: false,
-          failedTable: 'work_order_payments',
-          message: formatPgError('work_order_payments', payRes.error),
-        };
-      }
+  const appointmentRows = s.appointments.map((apt) => mapAppointmentToDb(apt));
+  if (appointmentRows.length > 0) {
+    const aptRes = await client
+      .from('appointments')
+      .upsert(appointmentRows, { onConflict: 'id' });
+    if (aptRes.error) {
+      return {
+        ok: false,
+        failedTable: 'appointments',
+        message: formatPgError('appointments', aptRes.error),
+      };
     }
+  }
 
-    const photoRows = s.workOrders.flatMap((o) =>
-      o.photos.map((ph) =>
-        mapWorkOrderPhotoToDb(ph, {
-          tenantId: o.tenant_id,
-          workOrderId: o.id,
-        })
-      )
-    );
-    if (photoRows.length > 0) {
-      const phRes = await client
-        .from('work_order_photos')
-        .upsert(photoRows, { onConflict: 'id' });
-      if (phRes.error) {
-        return {
-          ok: false,
-          failedTable: 'work_order_photos',
-          message: formatPgError('work_order_photos', phRes.error),
-        };
-      }
-    }
+  return {
+    ok: true,
+    message: `Datos cargados en Supabase (${s.tenants.length} empresa(s), ${s.branches.length} sucursales, ${s.clients.length} clientes, ${s.assets.length} equipos, ${s.loanAssets.length} unidades préstamo/flota, ${s.workOrders.length} OTs y ${s.appointments.length} citas).`,
+  };
+}
 
-    const loanRows = s.workOrders
-      .filter((o) => Boolean(o.loan))
-      .map((o) =>
-        mapWorkOrderLoanToDb(o.loan!, {
-          tenantId: o.tenant_id,
-          workOrderId: o.id,
-        })
-      );
-    if (loanRows.length > 0) {
-      const wlRes = await client
-        .from('work_order_loans')
-        .upsert(loanRows, { onConflict: 'id' });
-      if (wlRes.error) {
-        return {
-          ok: false,
-          failedTable: 'work_order_loans',
-          message: formatPgError('work_order_loans', wlRes.error),
-        };
-      }
-    }
+export async function seedDemoDataToSupabase(
+  url: string,
+  anonKey: string
+): Promise<{ ok: boolean; failedTable?: string; message: string }> {
+  const client = getSupabaseClient(url, anonKey);
+  if (!client) return { ok: false, message: 'Credenciales inválidas.' };
 
-    const appointmentRows = s.appointments.map((apt) => mapAppointmentToDb(apt));
-    if (appointmentRows.length > 0) {
-      const aptRes = await client
-        .from('appointments')
-        .upsert(appointmentRows, { onConflict: 'id' });
-      if (aptRes.error) {
-        return {
-          ok: false,
-          failedTable: 'appointments',
-          message: formatPgError('appointments', aptRes.error),
-        };
-      }
-    }
-
-    return {
-      ok: true,
-      message: `Datos demo sembrados en Supabase en orden estricto FK (${s.tenants.length} empresas, ${s.branches.length} sucursales, ${s.clients.length} clientes, ${s.assets.length} equipos, ${s.workOrders.length} OTs y ${s.appointments.length} citas).`,
-    };
+  try {
+    return await upsertErpSubsetToSupabase(client, SEED_ERP_STATE);
   } catch (err) {
     return {
       ok: false,
@@ -714,108 +670,280 @@ export async function seedDemoDataToSupabase(
   }
 }
 
+export async function seedMissingSeedTenantsToSupabase(
+  url: string,
+  anonKey: string,
+  existingTenantIds: string[],
+  options?: { skipIds?: string[] }
+): Promise<{
+  ok: boolean;
+  addedTenantIds: string[];
+  failedTable?: string;
+  message: string;
+}> {
+  const client = getSupabaseClient(url, anonKey);
+  if (!client) {
+    return { ok: false, addedTenantIds: [], message: 'Credenciales inválidas.' };
+  }
+
+  const existingSet = new Set(existingTenantIds);
+  const skipSet = new Set(options?.skipIds ?? []);
+  const missingTenants = SEED_ERP_STATE.tenants.filter(
+    (t) => !existingSet.has(t.id) && !skipSet.has(t.id)
+  );
+
+  if (missingTenants.length === 0) {
+    return {
+      ok: true,
+      addedTenantIds: [],
+      message: 'Todas las empresas semilla ya están cargadas en Supabase.',
+    };
+  }
+
+  const missingIds = missingTenants.map((t) => t.id);
+  const subset = filterErpStateForTenants(SEED_ERP_STATE, new Set(missingIds), {
+    includeGlobalAppUsers: false,
+  });
+
+  try {
+    const res = await upsertErpSubsetToSupabase(client, subset);
+    return {
+      ...res,
+      addedTenantIds: res.ok ? missingIds : [],
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      addedTenantIds: [],
+      message:
+        err instanceof Error
+          ? err.message
+          : 'Error cargando empresas faltantes en Supabase.',
+    };
+  }
+}
+
+export async function seedAndesFleetToSupabase(
+  url: string,
+  anonKey: string
+): Promise<{ ok: boolean; failedTable?: string; message: string }> {
+  const client = getSupabaseClient(url, anonKey);
+  if (!client) return { ok: false, message: 'Credenciales inválidas.' };
+
+  const subset = filterErpStateForTenants(
+    SEED_ERP_STATE,
+    new Set([ANDESFLEET_TENANT_ID]),
+    { includeGlobalAppUsers: false }
+  );
+
+  try {
+    return await upsertErpSubsetToSupabase(client, subset);
+  } catch (err) {
+    return {
+      ok: false,
+      message:
+        err instanceof Error
+          ? err.message
+          : 'Error cargando AndesFleet Rent a Car SpA en Supabase.',
+    };
+  }
+}
+
 // ---------- LIVE CRUD OPERATIONS ----------
 
-export async function syncTenantToSupabase(cfg: SupabaseConfig, tenant: Tenant): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
-  const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('tenants').upsert(mapTenantToDb(tenant), { onConflict: 'id' });
-}
-
-export async function syncBranchToSupabase(cfg: SupabaseConfig, branch: Branch): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
-  const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('branches').upsert(mapBranchToDb(branch), { onConflict: 'id' });
-}
-
-export async function deleteBranchFromSupabase(cfg: SupabaseConfig, branchId: string): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
-  const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('branches').delete().eq('id', ensureUUID(branchId));
-}
-
-export async function syncProfileToSupabase(cfg: SupabaseConfig, profile: TeamProfile): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
-  const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('profiles').upsert(mapProfileToDb(profile), { onConflict: 'id' });
-}
-
-export async function syncAppUserToSupabase(
+export async function syncTenantToSupabase(
   cfg: SupabaseConfig,
-  user: AppUser
+  tenant: Tenant
 ): Promise<{ ok: boolean; error?: string }> {
   if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
   const res = await client
-    .from('app_users')
-    .upsert(mapAppUserToDb(user), { onConflict: 'id' });
+    .from('tenants')
+    .upsert(mapTenantToDb(tenant), { onConflict: 'id' });
+  if (res.error) return { ok: false, error: formatPgError('tenants', res.error) };
+  return { ok: true };
+}
+
+export async function syncBranchToSupabase(
+  cfg: SupabaseConfig,
+  branch: Branch
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
+  const client = getSupabaseClient(cfg.url, cfg.anonKey);
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const row = mapBranchToDb(branch);
+  let res = await client.from('branches').upsert(row, { onConflict: 'id' });
+  if (res.error && isMissingOptionalBranchColError(res.error)) {
+    res = await client
+      .from('branches')
+      .upsert(stripOptionalBranchColumns(row), { onConflict: 'id' });
+  }
+  if (res.error) return { ok: false, error: formatPgError('branches', res.error) };
+  return { ok: true };
+}
+
+export async function deleteBranchFromSupabase(
+  cfg: SupabaseConfig,
+  branchId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
+  const client = getSupabaseClient(cfg.url, cfg.anonKey);
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('branches')
+    .delete()
+    .eq('id', ensureUUID(branchId));
+  if (res.error) return { ok: false, error: formatPgError('branches', res.error) };
+  return { ok: true };
+}
+
+export async function syncAppUserToSupabase(
+  cfg: SupabaseConfig,
+  user: AppUser,
+  options?: { isNew?: boolean }
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
+  const client = getSupabaseClient(cfg.url, cfg.anonKey);
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+
+  const hasPassword = user.pin_or_password.trim().length > 0;
+  const res =
+    options?.isNew || hasPassword
+      ? await client
+          .from('app_users')
+          .upsert(mapAppUserToDb(user), { onConflict: 'id' })
+      : await client
+          .from('app_users')
+          .update(mapAppUserUpdateWithoutPasswordToDb(user))
+          .eq('id', ensureUUID(user.id));
+
   if (res.error) {
     return { ok: false, error: formatPgError('app_users', res.error) };
   }
   return { ok: true };
 }
 
-export async function syncClientToSupabase(cfg: SupabaseConfig, c: Client): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+export async function deleteAppUserFromSupabase(
+  cfg: SupabaseConfig,
+  userId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('clients').upsert(mapClientToDb(c), { onConflict: 'id' });
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('app_users')
+    .delete()
+    .eq('id', ensureUUID(userId));
+  if (res.error) {
+    return { ok: false, error: formatPgError('app_users', res.error) };
+  }
+  return { ok: true };
 }
 
-export async function syncAssetToSupabase(cfg: SupabaseConfig, a: CustomerAsset): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+export async function syncClientToSupabase(
+  cfg: SupabaseConfig,
+  c: Client
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('customer_assets').upsert(mapAssetToDb(a), { onConflict: 'id' });
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client.from('clients').upsert(mapClientToDb(c), { onConflict: 'id' });
+  if (res.error) return { ok: false, error: formatPgError('clients', res.error) };
+  return { ok: true };
 }
 
-export async function syncCatalogItemToSupabase(cfg: SupabaseConfig, item: CatalogItem): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+export async function syncAssetToSupabase(
+  cfg: SupabaseConfig,
+  a: CustomerAsset
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('catalog_items').upsert(mapCatalogItemToDb(item), { onConflict: 'id' });
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('customer_assets')
+    .upsert(mapAssetToDb(a), { onConflict: 'id' });
+  if (res.error) {
+    return { ok: false, error: formatPgError('customer_assets', res.error) };
+  }
+  return { ok: true };
 }
 
-export async function syncLoanAssetToSupabase(cfg: SupabaseConfig, loan: LoanAsset): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+export async function syncCatalogItemToSupabase(
+  cfg: SupabaseConfig,
+  item: CatalogItem
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('loan_assets').upsert(mapLoanAssetToDb(loan), { onConflict: 'id' });
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('catalog_items')
+    .upsert(mapCatalogItemToDb(item), { onConflict: 'id' });
+  if (res.error) {
+    return { ok: false, error: formatPgError('catalog_items', res.error) };
+  }
+  return { ok: true };
+}
+
+export async function syncLoanAssetToSupabase(
+  cfg: SupabaseConfig,
+  loan: LoanAsset
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
+  const client = getSupabaseClient(cfg.url, cfg.anonKey);
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('loan_assets')
+    .upsert(mapLoanAssetToDb(loan), { onConflict: 'id' });
+  if (res.error) {
+    return { ok: false, error: formatPgError('loan_assets', res.error) };
+  }
+  return { ok: true };
 }
 
 export async function syncWorkOrderToSupabase(
   cfg: SupabaseConfig,
   order: WorkOrder,
-  taxRate = 19
-): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+  taxRate = 19,
+  catalogItems?: CatalogItem[]
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
 
   const woRes = await client
     .from('work_orders')
     .upsert(mapWorkOrderToDb(order, taxRate), { onConflict: 'id' });
-  if (woRes.error) return;
+  if (woRes.error) {
+    return { ok: false, error: formatPgError('work_orders', woRes.error) };
+  }
 
-  // Sync child relational rows sequentially/best-effort
   if (order.items.length > 0) {
-    await client.from('work_order_items').upsert(
+    const catalogTypeMap = new Map(
+      (catalogItems ?? []).map((cat) => [
+        ensureUUID(cat.id),
+        cat.category === 'service' ? ('service' as const) : ('part' as const),
+      ])
+    );
+    const itemsRes = await client.from('work_order_items').upsert(
       order.items.map((it) =>
         mapWorkOrderItemToDb(it, {
           tenantId: order.tenant_id,
           workOrderId: order.id,
+          catalogItemType: it.catalog_item_id
+            ? catalogTypeMap.get(ensureUUID(it.catalog_item_id)) ??
+              (it.sku?.startsWith('SRV-') ? 'service' : undefined)
+            : undefined,
         })
       ),
       { onConflict: 'id' }
     );
+    if (itemsRes.error) {
+      return { ok: false, error: formatPgError('work_order_items', itemsRes.error) };
+    }
   }
   if (order.payments.length > 0) {
-    await client.from('work_order_payments').upsert(
+    const payRes = await client.from('work_order_payments').upsert(
       order.payments.map((p) =>
         mapWorkOrderPaymentToDb(p, {
           tenantId: order.tenant_id,
@@ -825,9 +953,12 @@ export async function syncWorkOrderToSupabase(
       ),
       { onConflict: 'id' }
     );
+    if (payRes.error) {
+      return { ok: false, error: formatPgError('work_order_payments', payRes.error) };
+    }
   }
   if (order.photos.length > 0) {
-    await client.from('work_order_photos').upsert(
+    const photoRes = await client.from('work_order_photos').upsert(
       order.photos.map((ph) =>
         mapWorkOrderPhotoToDb(ph, {
           tenantId: order.tenant_id,
@@ -836,42 +967,113 @@ export async function syncWorkOrderToSupabase(
       ),
       { onConflict: 'id' }
     );
+    if (photoRes.error) {
+      return { ok: false, error: formatPgError('work_order_photos', photoRes.error) };
+    }
   }
   if (order.loan) {
-    await client.from('work_order_loans').upsert(
+    const loanRes = await client.from('work_order_loans').upsert(
       mapWorkOrderLoanToDb(order.loan, {
         tenantId: order.tenant_id,
         workOrderId: order.id,
       }),
       { onConflict: 'id' }
     );
+    if (loanRes.error) {
+      return { ok: false, error: formatPgError('work_order_loans', loanRes.error) };
+    }
   }
+  return { ok: true };
 }
 
-export async function deleteOrderItemFromSupabase(cfg: SupabaseConfig, itemId: string): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+export async function deleteOrderItemFromSupabase(
+  cfg: SupabaseConfig,
+  itemId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('work_order_items').delete().eq('id', ensureUUID(itemId));
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('work_order_items')
+    .delete()
+    .eq('id', ensureUUID(itemId));
+  if (res.error) {
+    return { ok: false, error: formatPgError('work_order_items', res.error) };
+  }
+  return { ok: true };
 }
 
-export async function deleteOrderPhotoFromSupabase(cfg: SupabaseConfig, photoId: string): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+export async function deleteOrderPhotoFromSupabase(
+  cfg: SupabaseConfig,
+  photoId: string,
+  photoUrl?: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client.from('work_order_photos').delete().eq('id', ensureUUID(photoId));
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+
+  const uuid = ensureUUID(photoId);
+  let storagePath = '';
+  const marker = '/storage/v1/object/public/order-photos/';
+  if (photoUrl) {
+    const idx = photoUrl.indexOf(marker);
+    if (idx !== -1) {
+      storagePath = decodeURIComponent(photoUrl.slice(idx + marker.length).split('?')[0].trim());
+    }
+  }
+  if (!storagePath) {
+    const existing = await client
+      .from('work_order_photos')
+      .select('storage_path')
+      .eq('id', uuid)
+      .maybeSingle();
+    const rawPath = (existing.data as { storage_path?: string } | null)?.storage_path;
+    if (rawPath && rawPath !== 'demo') {
+      storagePath = rawPath;
+    }
+  }
+  if (storagePath) {
+    await client.storage.from('order-photos').remove([storagePath]);
+  }
+
+  const res = await client.from('work_order_photos').delete().eq('id', uuid);
+  if (res.error) {
+    return { ok: false, error: formatPgError('work_order_photos', res.error) };
+  }
+  return { ok: true };
+}
+
+export async function deleteOrderPaymentFromSupabase(
+  cfg: SupabaseConfig,
+  paymentId: string
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
+  const client = getSupabaseClient(cfg.url, cfg.anonKey);
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
+    .from('work_order_payments')
+    .delete()
+    .eq('id', ensureUUID(paymentId));
+  if (res.error) {
+    return { ok: false, error: formatPgError('work_order_payments', res.error) };
+  }
+  return { ok: true };
 }
 
 export async function syncAppointmentToSupabase(
   cfg: SupabaseConfig,
   apt: Appointment
-): Promise<void> {
-  if (!isSupabaseLive(cfg)) return;
+): Promise<{ ok: boolean; error?: string }> {
+  if (!isSupabaseLive(cfg)) return { ok: true };
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
-  if (!client) return;
-  await client
+  if (!client) return { ok: false, error: 'Cliente Supabase no inicializado.' };
+  const res = await client
     .from('appointments')
     .upsert(mapAppointmentToDb(apt), { onConflict: 'id' });
+  if (res.error) {
+    return { ok: false, error: formatPgError('appointments', res.error) };
+  }
+  return { ok: true };
 }
 
 // ---------- SUPABASE STORAGE (order-photos) ----------
@@ -916,35 +1118,100 @@ export async function loginWithAppUsers(
     return { ok: false, error: 'Configura Supabase antes de iniciar sesión.' };
   }
 
-  const { data, error } = await client
-    .from('app_users')
-    .select('*, tenants(*), branches(*)')
-    .eq('username', username.trim())
-    .eq('pin_or_password', password.trim())
-    .eq('is_active', true)
-    .single();
+  const cleanUser = username.trim().replace(/^@+/, '');
+  const cleanPass = password.trim();
 
-  if (error || !data) {
+  // Preferred secure path: POST RPC body (never leaks pin_or_password in GET URL query params)
+  const rpcRes = await client.rpc('authenticate_app_user', {
+    p_username: cleanUser,
+    p_password: cleanPass,
+  });
+
+  if (!rpcRes.error) {
+    const raw = (Array.isArray(rpcRes.data) ? rpcRes.data[0] : rpcRes.data) as {
+      user?: Record<string, unknown>;
+      tenant?: Record<string, unknown> | null;
+      branch?: Record<string, unknown> | null;
+    } | null;
+
+    if (!raw?.user) {
+      return {
+        ok: false,
+        error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
+      };
+    }
+
+    return {
+      ok: true,
+      user: {
+        id: String(raw.user.id),
+        username: String(raw.user.username ?? cleanUser),
+        full_name: String(raw.user.full_name ?? raw.user.username ?? 'Usuario'),
+        tenant_id: raw.user.tenant_id != null ? String(raw.user.tenant_id) : null,
+        branch_id: raw.user.branch_id != null ? String(raw.user.branch_id) : null,
+        role: mapDbRoleToRoleType(
+          raw.user.role != null ? String(raw.user.role) : null
+        ),
+        is_active: Boolean(raw.user.is_active ?? true),
+        mode: 'supabase',
+        tenant: raw.tenant ? mapTenantFromDb(raw.tenant) : null,
+        branch: raw.branch ? mapBranchFromDb(raw.branch) : null,
+      },
+    };
+  }
+
+  const rpcErrMsg = (rpcRes.error.message ?? '').toLowerCase();
+  const isMissingRpc =
+    rpcRes.error.code === 'PGRST202' ||
+    rpcRes.error.code === '42883' ||
+    rpcErrMsg.includes('authenticate_app_user');
+
+  if (!isMissingRpc) {
     return {
       ok: false,
       error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
     };
   }
 
-  const row = data as Record<string, unknown>;
-  const rawTenant = row.tenants as Record<string, unknown> | null | undefined;
-  const rawBranch = row.branches as Record<string, unknown> | null | undefined;
+  // Fallback for older schemas where authenticate_app_user RPC has not been applied yet
+  const escaped = cleanUser.replace(/[%_\\]/g, '\\$&');
+  const { data, error } = await client
+    .from('app_users')
+    .select(
+      'id, tenant_id, branch_id, username, full_name, role, is_active, tenants(*), branches(*)'
+    )
+    .ilike('username', escaped)
+    .eq('pin_or_password', cleanPass)
+    .eq('is_active', true)
+    .limit(5);
+
+  const candidates = (data ?? []) as Array<Record<string, unknown>>;
+  const matchedRow = candidates.find(
+    (r) => String(r.username ?? '').trim().toLowerCase() === cleanUser.toLowerCase()
+  );
+
+  if (error || !matchedRow) {
+    return {
+      ok: false,
+      error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
+    };
+  }
+
+  const rawTenant = matchedRow.tenants as Record<string, unknown> | null | undefined;
+  const rawBranch = matchedRow.branches as Record<string, unknown> | null | undefined;
 
   return {
     ok: true,
     user: {
-      id: String(row.id),
-      username: String(row.username ?? username.trim()),
-      full_name: String(row.full_name ?? row.username ?? 'Usuario'),
-      tenant_id: row.tenant_id != null ? String(row.tenant_id) : null,
-      branch_id: row.branch_id != null ? String(row.branch_id) : null,
-      role: mapDbRoleToRoleType(row.role != null ? String(row.role) : null),
-      is_active: Boolean(row.is_active ?? true),
+      id: String(matchedRow.id),
+      username: String(matchedRow.username ?? cleanUser),
+      full_name: String(matchedRow.full_name ?? matchedRow.username ?? 'Usuario'),
+      tenant_id: matchedRow.tenant_id != null ? String(matchedRow.tenant_id) : null,
+      branch_id: matchedRow.branch_id != null ? String(matchedRow.branch_id) : null,
+      role: mapDbRoleToRoleType(
+        matchedRow.role != null ? String(matchedRow.role) : null
+      ),
+      is_active: Boolean(matchedRow.is_active ?? true),
       mode: 'supabase',
       tenant: rawTenant ? mapTenantFromDb(rawTenant) : null,
       branch: rawBranch ? mapBranchFromDb(rawBranch) : null,
@@ -1021,6 +1288,8 @@ export async function upsertMigratedDataToSupabase(
     clients: Client[];
     assets: CustomerAsset[];
     workOrders: WorkOrder[];
+    catalogItems?: CatalogItem[];
+    ivaRate?: number;
   }
 ): Promise<{ ok: boolean; error?: string }> {
   const client = getSupabaseClient(url, anonKey);
@@ -1042,16 +1311,27 @@ export async function upsertMigratedDataToSupabase(
       }
     }
     if (payload.workOrders.length > 0) {
-      const rows = payload.workOrders.map((wo) => mapWorkOrderToDb(wo, 0));
+      const ivaRate = payload.ivaRate ?? 19;
+      const rows = payload.workOrders.map((wo) => mapWorkOrderToDb(wo, ivaRate));
       const res = await client.from('work_orders').upsert(rows, { onConflict: 'id' });
       if (res.error) {
         return { ok: false, error: formatPgError('work_orders', res.error) };
       }
+      const catalogTypeMap = new Map(
+        (payload.catalogItems ?? []).map((cat) => [
+          ensureUUID(cat.id),
+          cat.category === 'service' ? ('service' as const) : ('part' as const),
+        ])
+      );
       const itemRows = payload.workOrders.flatMap((o) =>
         o.items.map((it) =>
           mapWorkOrderItemToDb(it, {
             tenantId: o.tenant_id,
             workOrderId: o.id,
+            catalogItemType: it.catalog_item_id
+              ? catalogTypeMap.get(ensureUUID(it.catalog_item_id)) ??
+                (it.sku?.startsWith('SRV-') ? 'service' : undefined)
+              : undefined,
           })
         )
       );
@@ -1080,6 +1360,25 @@ export async function upsertMigratedDataToSupabase(
           return {
             ok: false,
             error: formatPgError('work_order_payments', payRes.error),
+          };
+        }
+      }
+      const photoRows = payload.workOrders.flatMap((o) =>
+        o.photos.map((ph) =>
+          mapWorkOrderPhotoToDb(ph, {
+            tenantId: o.tenant_id,
+            workOrderId: o.id,
+          })
+        )
+      );
+      if (photoRows.length > 0) {
+        const phRes = await client
+          .from('work_order_photos')
+          .upsert(photoRows, { onConflict: 'id' });
+        if (phRes.error) {
+          return {
+            ok: false,
+            error: formatPgError('work_order_photos', phRes.error),
           };
         }
       }
@@ -1117,10 +1416,15 @@ create table if not exists public.branches (
   code text not null,
   is_headquarters boolean not null default false,
   address text,
+  city text,
   phone text,
+  business_hours text,
   email text,
   is_active boolean not null default true
 );
+
+alter table public.branches add column if not exists city text;
+alter table public.branches add column if not exists business_hours text;
 
 create unique index if not exists idx_single_hq_per_tenant
   on public.branches (tenant_id) where (is_headquarters = true);
@@ -1134,17 +1438,6 @@ create table if not exists public.app_users (
   full_name text not null,
   role text not null default 'technician',
   is_active boolean not null default true,
-  created_at timestamptz default now()
-);
-
-create table if not exists public.profiles (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid references public.tenants(id) on delete cascade,
-  branch_id uuid references public.branches(id) on delete set null,
-  full_name text not null,
-  email text not null,
-  role text not null default 'company_admin',
-  active boolean not null default true,
   created_at timestamptz default now()
 );
 
@@ -1208,7 +1501,7 @@ create table if not exists public.loan_assets (
 create table if not exists public.work_orders (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete restrict,
   order_number integer not null default 100,
   folio text not null,
   tracking_code text not null,
@@ -1278,7 +1571,7 @@ create table if not exists public.work_order_loans (
 create table if not exists public.work_order_payments (
   id uuid primary key default gen_random_uuid(),
   tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete cascade,
+  branch_id uuid not null references public.branches(id) on delete restrict,
   work_order_id uuid not null references public.work_orders(id) on delete cascade,
   receipt_number text,
   amount numeric not null default 0,
@@ -1328,9 +1621,6 @@ begin
   insert into public.branches (id, tenant_id, name, code, is_headquarters)
   values (v_branch_id, v_tenant_id, p_hq_name, 'HQ-01', true);
 
-  insert into public.profiles (id, tenant_id, branch_id, full_name, email, role, active)
-  values (p_user_id, v_tenant_id, null, p_full_name, p_email, 'company_admin', true);
-
   return jsonb_build_object('tenant_id', v_tenant_id, 'branch_id', v_branch_id);
 end;
 $$;
@@ -1371,4 +1661,71 @@ begin
     'photos', coalesce((select jsonb_agg(ph) from public.work_order_photos ph where ph.work_order_id = v_order.id), '[]'::jsonb)
   );
 end;
-$$;`;
+$$;
+
+-- RPC Autenticación segura sin exponer pin_or_password en URL query params
+create or replace function authenticate_app_user(p_username text, p_password text)
+returns jsonb language plpgsql security definer as $$
+declare
+  v_user public.app_users%rowtype;
+  v_tenant public.tenants%rowtype;
+  v_branch public.branches%rowtype;
+begin
+  select * into v_user
+  from public.app_users
+  where lower(trim(username)) = lower(trim(p_username))
+    and pin_or_password = trim(p_password)
+    and is_active = true
+  limit 1;
+
+  if not found then
+    return null;
+  end if;
+
+  if v_user.tenant_id is not null then
+    select * into v_tenant from public.tenants where id = v_user.tenant_id;
+  end if;
+  if v_user.branch_id is not null then
+    select * into v_branch from public.branches where id = v_user.branch_id;
+  end if;
+
+  return jsonb_build_object(
+    'user', jsonb_build_object(
+      'id', v_user.id,
+      'tenant_id', v_user.tenant_id,
+      'branch_id', v_user.branch_id,
+      'username', v_user.username,
+      'full_name', v_user.full_name,
+      'role', v_user.role,
+      'is_active', v_user.is_active
+    ),
+    'tenant', case when v_user.tenant_id is not null then to_jsonb(v_tenant) else null end,
+    'branch', case when v_user.branch_id is not null then to_jsonb(v_branch) else null end
+  );
+end;
+$$;
+
+-- Nota de endurecimiento RLS para producción (activar tras configurar JWT claims / Edge Function):
+-- alter table public.tenants enable row level security;
+-- alter table public.branches enable row level security;
+-- alter table public.app_users enable row level security;
+-- alter table public.clients enable row level security;
+-- alter table public.customer_assets enable row level security;
+-- alter table public.catalog_items enable row level security;
+-- alter table public.loan_assets enable row level security;
+-- alter table public.work_orders enable row level security;
+-- alter table public.work_order_items enable row level security;
+-- alter table public.work_order_photos enable row level security;
+-- alter table public.work_order_loans enable row level security;
+-- alter table public.work_order_payments enable row level security;
+-- alter table public.appointments enable row level security;
+
+-- Seed Usuarios de Pruebas (GlobalTi y Maquinarias del Sur) - Perfil gtitech intocable
+insert into public.app_users (id, tenant_id, branch_id, username, pin_or_password, full_name, role, is_active)
+values
+  ('11111111-1111-4111-8111-111111110199', '11111111-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111101', 'test_tech_global', '1234', 'Técnico Pruebas GlobalTi', 'technician', true),
+  ('11111111-1111-4111-8111-111111110198', '11111111-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111101', 'test_recep_global', '1234', 'Recepcionista Pruebas GlobalTi', 'receptionist', true),
+  ('22222222-2222-4222-8222-222222220199', '22222222-2222-4222-8222-222222222222', '22222222-2222-4222-8222-222222222201', 'test_tech_sur', '1234', 'Técnico Pruebas Maquinarias Sur', 'technician', true),
+  ('22222222-2222-4222-8222-222222220198', '22222222-2222-4222-8222-222222222222', '22222222-2222-4222-8222-222222220201', 'test_recep_sur', '1234', 'Recepcionista Pruebas Maquinarias Sur', 'receptionist', true)
+on conflict (username) do nothing;
+`;

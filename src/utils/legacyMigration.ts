@@ -43,7 +43,7 @@ export interface MigrationPreviewRow {
 
 export const SIMULATED_MDB_RECORDS: LegacyMdbRecord[] = [
   {
-    legacyId: 'CP-4012',
+    legacyId: 'FX-4012',
     clientName: 'María Fernanda Rojas',
     clientRut: '17.654.321-9',
     clientPhone: '+56 9 8412 3390',
@@ -62,7 +62,7 @@ export const SIMULATED_MDB_RECORDS: LegacyMdbRecord[] = [
     status: 'delivered',
   },
   {
-    legacyId: 'CP-4013',
+    legacyId: 'FX-4013',
     clientName: 'Transportes del Cachapoal Ltda.',
     clientRut: '76.332.890-1',
     clientPhone: '+56 9 9120 5544',
@@ -81,7 +81,7 @@ export const SIMULATED_MDB_RECORDS: LegacyMdbRecord[] = [
     status: 'ready',
   },
   {
-    legacyId: 'CP-4014',
+    legacyId: 'FX-4014',
     clientName: 'Andrés Morales Vega',
     clientRut: '14.889.201-4',
     clientPhone: '+56 9 7834 1102',
@@ -100,7 +100,7 @@ export const SIMULATED_MDB_RECORDS: LegacyMdbRecord[] = [
     status: 'in_repair',
   },
   {
-    legacyId: 'CP-4015',
+    legacyId: 'FX-4015',
     clientName: 'Transportes del Cachapoal Ltda.',
     clientRut: '76.332.890-1',
     clientPhone: '+56 9 9120 5544',
@@ -145,7 +145,12 @@ function splitCsvLine(line: string, delimiter: string): string[] {
   for (let i = 0; i < line.length; i++) {
     const ch = line[i];
     if (ch === '"') {
-      inQuotes = !inQuotes;
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
     } else if (ch === delimiter && !inQuotes) {
       out.push(current.trim());
       current = '';
@@ -321,6 +326,9 @@ export function executeLegacyMigration(
   createdClients: number;
   skippedDuplicates: number;
   attachedPhotos: number;
+  createdClientsList: Client[];
+  createdAssetsList: CustomerAsset[];
+  createdOrdersList: WorkOrder[];
 } {
   const tenant = currentState.tenants.find((t) => t.id === options.tenantId);
   const prefix = tenant?.folio_prefix ?? 'OT';
@@ -328,6 +336,9 @@ export function executeLegacyMigration(
   const nextClients: Client[] = [...currentState.clients];
   const nextAssets: CustomerAsset[] = [...currentState.assets];
   const nextOrders: WorkOrder[] = [...currentState.workOrders];
+  const createdClientsList: Client[] = [];
+  const createdAssetsList: CustomerAsset[] = [];
+  const createdOrdersList: WorkOrder[] = [];
 
   let importedOrders = 0;
   let createdClients = 0;
@@ -364,6 +375,7 @@ export function executeLegacyMigration(
         city: rec.clientCity || '',
       };
       nextClients.unshift(client);
+      createdClientsList.push(client);
       createdClients++;
     }
 
@@ -378,6 +390,7 @@ export function executeLegacyMigration(
       custom_attributes: { legacy_origin: rec.legacyId },
     };
     nextAssets.unshift(asset);
+    createdAssetsList.push(asset);
 
     const folio = generateNextFolio(prefix, nextOrders, options.tenantId);
     const createdIso = `${rec.entryDate}T10:00:00Z`;
@@ -402,7 +415,7 @@ export function executeLegacyMigration(
       asset_id: asset.id,
       status: rec.status,
       modality: 'workshop',
-      accessories_received: 'Importado desde registro histórico CP Reparaciones',
+      accessories_received: 'Importado desde registro histórico FIXICLOUD',
       entry_condition: 'Historial migrado',
       reported_symptoms: rec.symptoms,
       technical_diagnosis: rec.diagnosis,
@@ -442,6 +455,7 @@ export function executeLegacyMigration(
     };
 
     nextOrders.unshift(newOrder);
+    createdOrdersList.push(newOrder);
     importedOrders++;
   }
 
@@ -456,5 +470,8 @@ export function executeLegacyMigration(
     createdClients,
     skippedDuplicates,
     attachedPhotos,
+    createdClientsList,
+    createdAssetsList,
+    createdOrdersList,
   };
 }

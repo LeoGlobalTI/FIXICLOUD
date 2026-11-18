@@ -11,7 +11,6 @@ import type {
   PaymentMethod,
   PhotoStage,
   ServiceModality,
-  TeamProfile,
   Tenant,
   WorkOrder,
   WorkOrderItem,
@@ -68,7 +67,14 @@ function buildIsoTimestamp(dateStr: string, timeStr: string): string {
 
 function extractDateAndTime(iso?: string | null, fallbackDate?: string, fallbackTime?: string) {
   if (iso && iso.includes('T')) {
-    const [d, rest] = iso.split('T');
+    let normalized = iso.trim();
+    if (/[+-]\d{2}:?\d{2}$/.test(normalized)) {
+      const parsed = new Date(normalized);
+      if (!Number.isNaN(parsed.getTime())) {
+        normalized = parsed.toISOString();
+      }
+    }
+    const [d, rest] = normalized.split('T');
     return {
       date: /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : fallbackDate ?? new Date().toISOString().slice(0, 10),
       time: rest.slice(0, 5) || fallbackTime || '09:00',
@@ -80,9 +86,25 @@ function extractDateAndTime(iso?: string | null, fallbackDate?: string, fallback
   };
 }
 
+function formatPromisedAtForInput(raw: unknown): string | undefined {
+  if (raw == null) return undefined;
+  const str = String(raw).trim();
+  if (!str) return undefined;
+  if (/(Z|[+-]\d{2}:?\d{2})$/i.test(str)) {
+    const parsed = new Date(str);
+    if (!Number.isNaN(parsed.getTime())) {
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(
+        parsed.getDate()
+      )}T${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
+    }
+  }
+  return str.slice(0, 16);
+}
+
 // ---------- OUTGOING MAPPERS (App -> PostgreSQL Exact Columns) ----------
 
-export interface DbTenantRow {
+interface DbTenantRow {
   id: string;
   name: string;
   legal_name: string | null;
@@ -116,14 +138,16 @@ export function mapTenantToDb(tenant: Tenant, lastOrderNumber = 105): DbTenantRo
   };
 }
 
-export interface DbBranchRow {
+interface DbBranchRow {
   id: string;
   tenant_id: string;
   name: string;
   code: string;
   is_headquarters: boolean;
   address: string | null;
+  city: string | null;
   phone: string | null;
+  business_hours: string | null;
   email: string | null;
   is_active: boolean;
 }
@@ -136,10 +160,19 @@ export function mapBranchToDb(branch: Branch, forceNonHq = false): DbBranchRow {
     code: branch.code,
     is_headquarters: forceNonHq ? false : Boolean(branch.is_hq),
     address: branch.address || null,
+    city: branch.city || null,
     phone: branch.phone || null,
+    business_hours: branch.business_hours || null,
     email: null,
     is_active: true,
   };
+}
+
+export function stripOptionalBranchColumns(
+  row: DbBranchRow
+): Omit<DbBranchRow, 'city' | 'business_hours'> {
+  const { city: _city, business_hours: _hours, ...rest } = row;
+  return rest;
 }
 
 export function mapBranchesToDbSafe(branches: Branch[]): DbBranchRow[] {
@@ -158,7 +191,7 @@ export function mapBranchesToDbSafe(branches: Branch[]): DbBranchRow[] {
   });
 }
 
-export interface DbClientRow {
+interface DbClientRow {
   id: string;
   tenant_id: string;
   branch_id: string | null;
@@ -193,7 +226,7 @@ export function mapClientToDb(
   };
 }
 
-export interface DbCustomerAssetRow {
+interface DbCustomerAssetRow {
   id: string;
   tenant_id: string;
   client_id: string;
@@ -221,7 +254,7 @@ export function mapAssetToDb(asset: CustomerAsset): DbCustomerAssetRow {
   };
 }
 
-export interface DbCatalogItemRow {
+interface DbCatalogItemRow {
   id: string;
   tenant_id: string;
   branch_id: string;
@@ -256,7 +289,7 @@ export function mapCatalogItemToDb(item: CatalogItem): DbCatalogItemRow {
   };
 }
 
-export interface DbLoanAssetRow {
+interface DbLoanAssetRow {
   id: string;
   tenant_id: string;
   branch_id: string;
@@ -284,7 +317,7 @@ export function mapLoanAssetToDb(loan: LoanAsset): DbLoanAssetRow {
   };
 }
 
-export interface DbWorkOrderRow {
+interface DbWorkOrderRow {
   id: string;
   tenant_id: string;
   branch_id: string;
@@ -369,7 +402,7 @@ export function mapWorkOrderToDb(order: WorkOrder, taxRate = 19): DbWorkOrderRow
   };
 }
 
-export interface DbAppointmentRow {
+interface DbAppointmentRow {
   id: string;
   tenant_id: string;
   branch_id: string;
@@ -406,19 +439,7 @@ export function mapAppointmentToDb(apt: Appointment): DbAppointmentRow {
   };
 }
 
-export function mapProfileToDb(profile: TeamProfile) {
-  return {
-    id: ensureUUID(profile.id),
-    tenant_id: ensureUUID(profile.tenant_id),
-    branch_id: profile.branch_id ? ensureUUID(profile.branch_id) : null,
-    full_name: profile.full_name,
-    email: profile.email,
-    role: mapRoleTypeToDbRole(profile.role),
-    active: Boolean(profile.active),
-  };
-}
-
-export interface DbAppUserRow {
+interface DbAppUserRow {
   id: string;
   tenant_id: string | null;
   branch_id: string | null;
@@ -428,6 +449,8 @@ export interface DbAppUserRow {
   role: string;
   is_active: boolean;
 }
+
+type DbAppUserUpdateWithoutPasswordRow = Omit<DbAppUserRow, 'id' | 'pin_or_password'>;
 
 export function mapAppUserToDb(user: AppUser): DbAppUserRow {
   return {
@@ -442,7 +465,20 @@ export function mapAppUserToDb(user: AppUser): DbAppUserRow {
   };
 }
 
-export interface DbWorkOrderItemRow {
+export function mapAppUserUpdateWithoutPasswordToDb(
+  user: AppUser
+): DbAppUserUpdateWithoutPasswordRow {
+  return {
+    tenant_id: user.tenant_id ? ensureUUID(user.tenant_id) : null,
+    branch_id: user.branch_id ? ensureUUID(user.branch_id) : null,
+    username: user.username.trim(),
+    full_name: user.full_name.trim(),
+    role: mapRoleTypeToDbRole(user.role),
+    is_active: Boolean(user.is_active),
+  };
+}
+
+interface DbWorkOrderItemRow {
   id: string;
   tenant_id: string;
   work_order_id: string;
@@ -478,7 +514,7 @@ export function mapWorkOrderItemToDb(
   };
 }
 
-export interface DbWorkOrderPaymentRow {
+interface DbWorkOrderPaymentRow {
   id: string;
   tenant_id: string;
   branch_id: string;
@@ -523,7 +559,7 @@ export function mapWorkOrderPaymentToDb(
   };
 }
 
-export interface DbWorkOrderPhotoRow {
+interface DbWorkOrderPhotoRow {
   id: string;
   tenant_id: string;
   work_order_id: string;
@@ -562,7 +598,7 @@ export function mapWorkOrderPhotoToDb(
   };
 }
 
-export interface DbWorkOrderLoanRow {
+interface DbWorkOrderLoanRow {
   id: string;
   tenant_id: string;
   work_order_id: string;
@@ -738,7 +774,7 @@ export function mapWorkOrderFromDb(
         : undefined,
     visit_scheduled_at:
       row.promised_at != null
-        ? String(row.promised_at).slice(0, 16)
+        ? formatPromisedAtForInput(row.promised_at)
         : row.visit_scheduled_at != null
         ? String(row.visit_scheduled_at)
         : undefined,
@@ -820,19 +856,6 @@ export function mapAppointmentFromDb(row: Record<string, unknown>): Appointment 
     notes: notes || undefined,
     work_order_id:
       row.work_order_id != null ? String(row.work_order_id) : undefined,
-    created_at: String(row.created_at ?? new Date().toISOString()),
-  };
-}
-
-export function mapProfileFromDb(row: Record<string, unknown>): TeamProfile {
-  return {
-    id: String(row.id),
-    tenant_id: String(row.tenant_id),
-    branch_id: row.branch_id != null ? String(row.branch_id) : null,
-    full_name: String(row.full_name ?? ''),
-    email: String(row.email ?? ''),
-    role: mapDbRoleToRoleType(row.role != null ? String(row.role) : null),
-    active: Boolean(row.active ?? true),
     created_at: String(row.created_at ?? new Date().toISOString()),
   };
 }

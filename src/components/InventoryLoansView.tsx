@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Laptop, Minus, Package, Plus } from 'lucide-react';
 import type { Branch, CatalogItem, LoanAsset, RoleType, Tenant } from '../types/erp';
 import { formatCurrency, getRolePermissions } from '../utils/erpLogic';
@@ -8,6 +8,7 @@ interface InventoryLoansViewProps {
   tenant: Tenant;
   branches: Branch[];
   activeBranchId: string;
+  lockedBranchId?: string | null;
   activeRole: RoleType;
   catalogItems: CatalogItem[];
   loanAssets: LoanAsset[];
@@ -21,6 +22,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
   tenant,
   branches,
   activeBranchId,
+  lockedBranchId,
   activeRole,
   catalogItems,
   loanAssets,
@@ -34,11 +36,26 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
   const [showNewLoan, setShowNewLoan] = useState(false);
 
   const perms = getRolePermissions(activeRole);
-  const tenantBranches = branches.filter((b) => b.tenant_id === tenant.id);
+  const tenantBranches = useMemo(
+    () => branches.filter((b) => b.tenant_id === tenant.id),
+    [branches, tenant.id]
+  );
+  const visibleBranches = useMemo(
+    () =>
+      lockedBranchId
+        ? tenantBranches.filter((b) => b.id === lockedBranchId)
+        : tenantBranches,
+    [lockedBranchId, tenantBranches]
+  );
+  const effectiveDefaultBranches =
+    visibleBranches.length > 0 ? visibleBranches : tenantBranches;
   const defaultBranchId =
-    activeBranchId !== 'ALL'
+    lockedBranchId ||
+    (activeBranchId !== 'ALL' && tenantBranches.some((b) => b.id === activeBranchId)
       ? activeBranchId
-      : tenantBranches.find((b) => b.is_hq)?.id ?? tenantBranches[0]?.id ?? '';
+      : effectiveDefaultBranches.find((b) => b.is_hq)?.id ??
+        effectiveDefaultBranches[0]?.id ??
+        '');
 
   // New Catalog Item state
   const [itemBranch, setItemBranch] = useState(defaultBranchId);
@@ -58,21 +75,42 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
   const [loanSerial, setLoanSerial] = useState('');
   const [loanNotes, setLoanNotes] = useState('');
 
-  const scopedCatalog = catalogItems.filter(
-    (c) => c.tenant_id === tenant.id && (activeBranchId === 'ALL' || c.branch_id === activeBranchId)
+  useEffect(() => {
+    setItemBranch(defaultBranchId);
+    setLoanBranch(defaultBranchId);
+  }, [tenant.id, defaultBranchId]);
+
+  useEffect(() => {
+    setShowNewItem(false);
+    setShowNewLoan(false);
+  }, [activeRole]);
+
+  const scopedCatalog = useMemo(
+    () =>
+      catalogItems.filter(
+        (c) => c.tenant_id === tenant.id && (activeBranchId === 'ALL' || c.branch_id === activeBranchId)
+      ),
+    [catalogItems, tenant.id, activeBranchId]
   );
-  const scopedLoans = loanAssets.filter(
-    (l) => l.tenant_id === tenant.id && (activeBranchId === 'ALL' || l.branch_id === activeBranchId)
+  const scopedLoans = useMemo(
+    () =>
+      loanAssets.filter(
+        (l) => l.tenant_id === tenant.id && (activeBranchId === 'ALL' || l.branch_id === activeBranchId)
+      ),
+    [loanAssets, tenant.id, activeBranchId]
   );
-  const branchMap = new Map(branches.map((b) => [b.id, b]));
+  const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
+
+  const resolveValidBranch = (candidate: string) =>
+    effectiveDefaultBranches.some((b) => b.id === candidate) ? candidate : defaultBranchId;
 
   const handleCreateItem = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!name.trim() || !perms.canManageStock || !perms.canManageCatalogPrices) return;
     onAddCatalogItem({
       id: generateUUID(),
       tenant_id: tenant.id,
-      branch_id: itemBranch || defaultBranchId,
+      branch_id: resolveValidBranch(itemBranch),
       sku: sku.trim() || `SKU-${Math.floor(1000 + Math.random() * 9000)}`,
       name: name.trim(),
       category,
@@ -90,11 +128,11 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
 
   const handleCreateLoan = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!loanName.trim() || !loanCode.trim()) return;
+    if (!loanName.trim() || !loanCode.trim() || !perms.canManageStock) return;
     onAddLoanAsset({
       id: generateUUID(),
       tenant_id: tenant.id,
-      branch_id: loanBranch || defaultBranchId,
+      branch_id: resolveValidBranch(loanBranch),
       code: loanCode.trim().toUpperCase(),
       name: loanName.trim(),
       brand_model: loanModel.trim() || 'Estándar taller',
@@ -150,7 +188,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
             </button>
           </div>
 
-          {perms.canManageStock && tab === 'catalog' && (
+          {perms.canManageStock && perms.canManageCatalogPrices && tab === 'catalog' && (
             <button
               type="button"
               onClick={() => setShowNewItem((v) => !v)}
@@ -175,7 +213,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
 
       {tab === 'catalog' && (
         <div className="space-y-4">
-          {showNewItem && (
+          {showNewItem && perms.canManageStock && perms.canManageCatalogPrices && (
             <form
               onSubmit={handleCreateItem}
               className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4"
@@ -186,10 +224,11 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                 <select
                   value={itemBranch}
+                  disabled={Boolean(lockedBranchId)}
                   onChange={(e) => setItemBranch(e.target.value)}
-                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-75"
                 >
-                  {tenantBranches.map((b) => (
+                  {effectiveDefaultBranches.map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name}
                     </option>
@@ -367,7 +406,7 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
 
       {tab === 'loans' && (
         <div className="space-y-4">
-          {showNewLoan && (
+          {showNewLoan && perms.canManageStock && (
             <form
               onSubmit={handleCreateLoan}
               className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4"
@@ -378,10 +417,11 @@ export const InventoryLoansView: React.FC<InventoryLoansViewProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <select
                   value={loanBranch}
+                  disabled={Boolean(lockedBranchId)}
                   onChange={(e) => setLoanBranch(e.target.value)}
-                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
+                  className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-75"
                 >
-                  {tenantBranches.map((b) => (
+                  {effectiveDefaultBranches.map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name}
                     </option>

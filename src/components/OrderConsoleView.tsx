@@ -1,17 +1,18 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Camera,
+  Check,
   CheckCircle2,
-  Cpu,
   CreditCard,
   Home,
   Laptop,
   MessageCircle,
   PackagePlus,
+  PanelLeftClose,
+  PanelLeftOpen,
   Plus,
   Printer,
   Search,
-  Smartphone,
   Store,
   Trash2,
   Upload,
@@ -25,7 +26,6 @@ import type {
   CatalogItem,
   Client,
   CustomerAsset,
-  IndustrySector,
   LoanAsset,
   OrderStatus,
   PaymentMethod,
@@ -42,11 +42,13 @@ import type {
 import {
   ORDER_STATUS_META,
   calculateOrderFinancials,
+  canDeductCatalogStock,
   filterWorkOrders,
   formatCurrency,
   getRolePermissions,
   getSectorCustomFields,
 } from '../utils/erpLogic';
+import { getSectorIconMeta } from '../utils/sectorMeta';
 import { compressImageToWebP } from '../utils/imageCompression';
 import {
   isSupabaseLive,
@@ -55,78 +57,8 @@ import {
 import { generateUUID } from '../utils/uuid';
 import { WhatsAppModal } from './WhatsAppModal';
 
-const STAGE_PROGRESS: Record<OrderStatus, number> = {
-  received: 20,
-  diagnosing: 40,
-  waiting_approval: 55,
-  in_repair: 75,
-  ready: 90,
-  delivered: 100,
-};
-
-const STATUS_PILL_MAP: Record<
-  OrderStatus,
-  { label: string; shortLabel: string; classes: string }
-> = {
-  received: {
-    label: 'Recibido',
-    shortLabel: 'Recibido',
-    classes: 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]',
-  },
-  diagnosing: {
-    label: 'Diagnóstico',
-    shortLabel: 'Diagnóstico',
-    classes: 'bg-[#F4F6FB] text-slate-600 border border-[#D8E4EC]',
-  },
-  waiting_approval: {
-    label: 'Esperando Aprobación',
-    shortLabel: 'Por Aprobar',
-    classes: 'bg-amber-50 text-amber-700 border border-amber-200',
-  },
-  in_repair: {
-    label: 'En Proceso',
-    shortLabel: 'En Proceso',
-    classes: 'bg-[#EBF4FA] text-[#3E92CC] border border-[#3E92CC]/25',
-  },
-  ready: {
-    label: 'Listo / Revisión',
-    shortLabel: 'Listo',
-    classes: 'bg-[#EBF8F6] text-[#1B998B] border border-[#1B998B]/25',
-  },
-  delivered: {
-    label: 'Entregado',
-    shortLabel: 'Entregado',
-    classes: 'bg-[#EBF8F6] text-[#157A6E] border border-[#1B998B]/30',
-  },
-};
-
-function getSectorIconMeta(sector: IndustrySector) {
-  switch (sector) {
-    case 'mobile':
-      return {
-        bg: 'bg-violet-50 text-violet-600 border-violet-200/70',
-        Icon: Smartphone,
-      };
-    case 'machinery':
-      return {
-        bg: 'bg-[#EBF8F6] text-[#1B998B] border-[#1B998B]/25',
-        Icon: Wrench,
-      };
-    case 'appliances':
-      return {
-        bg: 'bg-amber-50 text-amber-600 border-amber-200/70',
-        Icon: Cpu,
-      };
-    default:
-      return {
-        bg: 'bg-[#EBF4FA] text-[#3E92CC] border-[#3E92CC]/25',
-        Icon: Laptop,
-      };
-  }
-}
-
 const INPUT_CLASS =
-  'w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors';
+  'w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-70 disabled:cursor-not-allowed';
 
 
 interface OrderConsoleViewProps {
@@ -150,7 +82,8 @@ interface OrderConsoleViewProps {
   onAssignLoanAsset: (orderId: string, loanAssetId: string, notes: string) => void;
   onReturnLoanAsset: (orderId: string) => void;
   onDeleteOrderItem?: (itemId: string) => void;
-  onDeleteOrderPhoto?: (photoId: string) => void;
+  onDeleteOrderPhoto?: (photoId: string, photoUrl?: string) => void;
+  onDeleteOrderPayment?: (paymentId: string) => void;
   onOpenNewOrder: () => void;
   onOpenPublicTrackWithCode: (code: string) => void;
   onOpenPrintCenter: (orderId: string) => void;
@@ -182,6 +115,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   onReturnLoanAsset,
   onDeleteOrderItem,
   onDeleteOrderPhoto,
+  onDeleteOrderPayment,
   onOpenNewOrder,
   onOpenPublicTrackWithCode,
   onOpenPrintCenter,
@@ -198,10 +132,12 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const [modalityFilter, setModalityFilter] = useState<ServiceModality | 'ALL'>('ALL');
   const [onlyMyOrders, setOnlyMyOrders] = useState(false);
   const [activeZone, setActiveZone] = useState<ZoneTab>('all');
+  const [isOrderListCollapsed, setIsOrderListCollapsed] = useState(false);
 
   // Zone 2 local inputs
   const [selectedCatalogId, setSelectedCatalogId] = useState('');
   const [catalogQty, setCatalogQty] = useState(1);
+  const [stockErrorMsg, setStockErrorMsg] = useState<string | null>(null);
   const [freeDesc, setFreeDesc] = useState('');
   const [freeQty, setFreeQty] = useState(1);
   const [freePrice, setFreePrice] = useState('');
@@ -209,6 +145,8 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const [payAmount, setPayAmount] = useState('');
   const [payMethod, setPayMethod] = useState<PaymentMethod>('transfer');
   const [payRef, setPayRef] = useState('');
+  const [paymentErrorMsg, setPaymentErrorMsg] = useState<string | null>(null);
+  const [pendingDeliveryWarning, setPendingDeliveryWarning] = useState(false);
 
   // Zone 3 local inputs
   const [photoUrlInput, setPhotoUrlInput] = useState('');
@@ -225,7 +163,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
 
   const perms = getRolePermissions(activeRole);
-  const techNameMatch = activeUser?.full_name?.trim() || 'Diego Torres';
+  const techFullName = activeUser?.full_name?.trim() ?? '';
+  const techUsername = activeUser?.username?.trim() ?? '';
+  const techFilterLabel = techFullName || techUsername || 'Por asignar';
 
   const filteredOrders = useMemo(() => {
     const base = filterWorkOrders(orders, clients, assets, {
@@ -236,10 +176,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       modality: modalityFilter,
     });
     if (activeRole === 'technician' && onlyMyOrders) {
-      return base.filter(
-        (o) =>
-          o.assigned_technician.toLowerCase().includes(techNameMatch.toLowerCase())
-      );
+      const normFull = techFullName.toLowerCase();
+      const normUser = techUsername.toLowerCase();
+      return base.filter((o) => {
+        const assigned = o.assigned_technician.trim().toLowerCase();
+        if (!assigned) return false;
+        if (normFull && assigned.includes(normFull)) return true;
+        if (normUser && assigned.includes(normUser)) return true;
+        return false;
+      });
     }
     return base;
   }, [
@@ -253,7 +198,8 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     modalityFilter,
     activeRole,
     onlyMyOrders,
-    techNameMatch,
+    techFullName,
+    techUsername,
   ]);
 
   const activeOrder =
@@ -272,11 +218,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const branchCatalog = useMemo(() => {
     if (!activeOrder) return [];
     return catalogItems.filter(
-      (c) =>
-        c.tenant_id === tenant.id &&
-        (c.branch_id === activeOrder.branch_id || activeBranchId === 'ALL')
+      (c) => c.tenant_id === tenant.id && c.branch_id === activeOrder.branch_id
     );
-  }, [catalogItems, tenant.id, activeOrder, activeBranchId]);
+  }, [catalogItems, tenant.id, activeOrder]);
 
   const availableLoans = useMemo(() => {
     if (!activeOrder) return [];
@@ -284,9 +228,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       (l) =>
         l.tenant_id === tenant.id &&
         l.status === 'available' &&
-        (l.branch_id === activeOrder.branch_id || activeBranchId === 'ALL')
+        l.branch_id === activeOrder.branch_id
     );
-  }, [loanAssets, tenant.id, activeOrder, activeBranchId]);
+  }, [loanAssets, tenant.id, activeOrder]);
 
   const financials = activeOrder
     ? calculateOrderFinancials(
@@ -300,21 +244,179 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
 
   const sectorFields = getSectorCustomFields(tenant.sector);
 
+  // Zone 1 & Zone 2 explicit draft state (prevents keystroke flooding to localStorage / Supabase)
+  const [z1Dirty, setZ1Dirty] = useState(false);
+  const [z1SavedMsg, setZ1SavedMsg] = useState<string | null>(null);
+  const [clientDraft, setClientDraft] = useState({
+    name: '',
+    rut: '',
+    phone: '',
+    email: '',
+    address: '',
+    city: '',
+  });
+  const [assetDraft, setAssetDraft] = useState<{
+    category: string;
+    brand: string;
+    model: string;
+    serial_imei: string;
+    password_pattern: string;
+    custom_attributes: Record<string, string>;
+  }>({
+    category: '',
+    brand: '',
+    model: '',
+    serial_imei: '',
+    password_pattern: '',
+    custom_attributes: {},
+  });
+  const [orderZ1Draft, setOrderZ1Draft] = useState({
+    visit_address: '',
+    visit_scheduled_at: '',
+    assigned_technician: '',
+    accessories_received: '',
+    entry_condition: '',
+  });
+
+  const [z2Dirty, setZ2Dirty] = useState(false);
+  const [z2SavedMsg, setZ2SavedMsg] = useState<string | null>(null);
+  const [orderZ2Draft, setOrderZ2Draft] = useState({
+    warranty_days: tenant.warranty_days ?? 90,
+    reported_symptoms: '',
+    technical_diagnosis: '',
+    work_performed: '',
+    parts_and_observations: '',
+  });
+
+  useEffect(() => {
+    setZ1Dirty(false);
+    setZ1SavedMsg(null);
+    setZ2Dirty(false);
+    setZ2SavedMsg(null);
+    setStockErrorMsg(null);
+    setPaymentErrorMsg(null);
+    setPendingDeliveryWarning(false);
+    setSelectedCatalogId('');
+    setLoanAssetToAssign('');
+    setPhotoStatusMsg(null);
+    if (activeClient) {
+      setClientDraft({
+        name: activeClient.name,
+        rut: activeClient.rut,
+        phone: activeClient.phone,
+        email: activeClient.email,
+        address: activeClient.address,
+        city: activeClient.city,
+      });
+    }
+    if (activeAsset) {
+      setAssetDraft({
+        category: activeAsset.category,
+        brand: activeAsset.brand,
+        model: activeAsset.model,
+        serial_imei: activeAsset.serial_imei,
+        password_pattern: activeAsset.password_pattern ?? '',
+        custom_attributes: { ...activeAsset.custom_attributes },
+      });
+    }
+    if (activeOrder) {
+      setOrderZ1Draft({
+        visit_address: activeOrder.visit_address ?? '',
+        visit_scheduled_at: activeOrder.visit_scheduled_at ?? '',
+        assigned_technician: activeOrder.assigned_technician,
+        accessories_received: activeOrder.accessories_received,
+        entry_condition: activeOrder.entry_condition,
+      });
+      setOrderZ2Draft({
+        warranty_days: activeOrder.warranty_days ?? tenant.warranty_days ?? 90,
+        reported_symptoms: activeOrder.reported_symptoms,
+        technical_diagnosis: activeOrder.technical_diagnosis,
+        work_performed: activeOrder.work_performed,
+        parts_and_observations: activeOrder.parts_and_observations,
+      });
+    }
+  }, [activeOrder?.id, activeClient?.id, activeAsset?.id, tenant.id, activeBranchId, tenant.warranty_days]);
+
   const patchOrder = (patch: Partial<WorkOrder>) => {
     if (!activeOrder) return;
+    const nextPatch: Partial<WorkOrder> = { ...patch };
+    if (!perms.canEditFinancials) {
+      delete nextPatch.apply_iva;
+      delete nextPatch.discount_amount;
+      delete nextPatch.items;
+    }
     onUpdateOrder({
       ...activeOrder,
-      ...patch,
+      ...nextPatch,
       updated_at: new Date().toISOString(),
     });
   };
 
+  const handleSaveZone1 = () => {
+    if (!activeOrder || !activeClient || !activeAsset || !perms.canManageClients) return;
+    onUpdateClient({
+      ...activeClient,
+      name: clientDraft.name,
+      rut: clientDraft.rut,
+      phone: clientDraft.phone,
+      email: clientDraft.email,
+      address: clientDraft.address,
+      city: clientDraft.city,
+    });
+    onUpdateAsset({
+      ...activeAsset,
+      category: assetDraft.category,
+      brand: assetDraft.brand,
+      model: assetDraft.model,
+      serial_imei: assetDraft.serial_imei,
+      password_pattern: assetDraft.password_pattern || undefined,
+      custom_attributes: assetDraft.custom_attributes,
+    });
+    patchOrder({
+      visit_address: orderZ1Draft.visit_address,
+      visit_scheduled_at: orderZ1Draft.visit_scheduled_at,
+      assigned_technician: orderZ1Draft.assigned_technician,
+      accessories_received: orderZ1Draft.accessories_received,
+      entry_condition: orderZ1Draft.entry_condition,
+    });
+    setZ1Dirty(false);
+    setZ1SavedMsg('Cambios de cliente y equipo guardados.');
+  };
+
+  const handleSaveZone2 = () => {
+    if (!activeOrder || (!perms.canManageClients && !perms.canEditDiagnosis)) return;
+    patchOrder({
+      ...(perms.canManageClients
+        ? {
+            warranty_days: Math.max(0, Number(orderZ2Draft.warranty_days) || 0),
+            reported_symptoms: orderZ2Draft.reported_symptoms,
+          }
+        : {}),
+      ...(perms.canEditDiagnosis
+        ? {
+            technical_diagnosis: orderZ2Draft.technical_diagnosis,
+            work_performed: orderZ2Draft.work_performed,
+            parts_and_observations: orderZ2Draft.parts_and_observations,
+          }
+        : {}),
+    });
+    setZ2Dirty(false);
+    setZ2SavedMsg('Diagnóstico, informe y garantía guardados.');
+  };
+
   const handleAddCatalogItem = () => {
-    if (!activeOrder) return;
+    if (!activeOrder || !perms.canEditFinancials) return;
     const itemId = selectedCatalogId || branchCatalog[0]?.id;
     const cat = branchCatalog.find((c) => c.id === itemId);
     if (!cat) return;
     const qty = Math.max(1, catalogQty);
+    if (!canDeductCatalogStock(cat.category, cat.stock_qty, qty)) {
+      setStockErrorMsg(
+        `Stock insuficiente para "${cat.name}" (disponible: ${cat.stock_qty}, solicitado: ${qty}).`
+      );
+      return;
+    }
+    setStockErrorMsg(null);
     const newItem: WorkOrderItem = {
       id: generateUUID(),
       source: 'catalog',
@@ -324,15 +426,17 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       qty,
       unit_price: cat.sale_price,
     };
-    onAdjustCatalogStock(cat.id, -qty);
+    if (cat.category === 'part') {
+      onAdjustCatalogStock(cat.id, -qty);
+    }
     patchOrder({ items: [...activeOrder.items, newItem] });
     setCatalogQty(1);
   };
 
   const handleAddFreeItem = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeOrder || !freeDesc.trim()) return;
-    const price = Number(freePrice) || 0;
+    if (!activeOrder || !perms.canEditFinancials || !freeDesc.trim()) return;
+    const price = Math.max(0, Number(freePrice) || 0);
     const qty = Math.max(1, freeQty);
     const newItem: WorkOrderItem = {
       id: generateUUID(),
@@ -348,19 +452,34 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   };
 
   const handleRemoveOrderItem = (item: WorkOrderItem) => {
-    if (!activeOrder) return;
+    if (!activeOrder || !perms.canEditFinancials) return;
     if (item.source === 'catalog' && item.catalog_item_id) {
-      onAdjustCatalogStock(item.catalog_item_id, item.qty);
+      const cat = catalogItems.find((c) => c.id === item.catalog_item_id);
+      if (!cat || cat.category === 'part') {
+        onAdjustCatalogStock(item.catalog_item_id, item.qty);
+      }
     }
     onDeleteOrderItem?.(item.id);
     patchOrder({ items: activeOrder.items.filter((i) => i.id !== item.id) });
   };
 
+  const canDeletePayments = activeRole === 'admin' || activeRole === 'superadmin';
+
   const handleAddPayment = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeOrder) return;
+    if (!activeOrder || !perms.canReceivePayments || !financials) return;
     const amt = Number(payAmount);
-    if (!amt || amt <= 0) return;
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setPaymentErrorMsg('Ingresa un monto de abono válido mayor a 0.');
+      return;
+    }
+    if (amt > financials.balanceDue) {
+      setPaymentErrorMsg(
+        `El abono excede el saldo pendiente (${formatCurrency(financials.balanceDue, tenant.currency)}).`
+      );
+      return;
+    }
+    setPaymentErrorMsg(null);
     const payment: WorkOrderPayment = {
       id: generateUUID(),
       date: new Date().toISOString().slice(0, 10),
@@ -371,6 +490,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     patchOrder({ payments: [...activeOrder.payments, payment] });
     setPayAmount('');
     setPayRef('');
+  };
+
+  const handleDeletePayment = (paymentId: string) => {
+    if (!activeOrder || !canDeletePayments) return;
+    onDeleteOrderPayment?.(paymentId);
+    patchOrder({
+      payments: activeOrder.payments.filter((p) => p.id !== paymentId),
+    });
+    setPaymentErrorMsg(null);
   };
 
   const handleAddPhotoUrl = (e: React.FormEvent) => {
@@ -409,14 +537,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
           stage: photoStage,
           caption,
         });
-        if (uploadRes.ok && uploadRes.publicUrl) {
-          finalUrl = uploadRes.publicUrl;
-          setPhotoStatusMsg(`Foto WebP subida a Storage (${compressed.sizeKb} KB).`);
-        } else {
+        if (!uploadRes.ok || !uploadRes.publicUrl) {
           setPhotoStatusMsg(
-            `Guardada en local WebP (${compressed.sizeKb} KB). Storage: ${uploadRes.error ?? 'sin bucket'}`
+            `Error al subir a Supabase Storage: ${uploadRes.error ?? 'verifica el bucket order-photos'}`
           );
+          return;
         }
+        finalUrl = uploadRes.publicUrl;
+        setPhotoStatusMsg(`Foto WebP subida a Storage (${compressed.sizeKb} KB).`);
       } else {
         setPhotoStatusMsg(`Foto comprimida a WebP (${compressed.sizeKb} KB).`);
       }
@@ -436,8 +564,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   };
 
   const handleDeletePhoto = (photoId: string) => {
-    if (!activeOrder) return;
-    onDeleteOrderPhoto?.(photoId);
+    if (!activeOrder || !perms.canDeletePhotos) return;
+    const targetPhoto = activeOrder.photos.find((p) => p.id === photoId);
+    onDeleteOrderPhoto?.(photoId, targetPhoto?.url);
     patchOrder({ photos: activeOrder.photos.filter((p) => p.id !== photoId) });
   };
 
@@ -452,8 +581,17 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       ? `Todas las sucursales · ${tenant.name}`
       : branchMap.get(activeBranchId)?.name ?? tenant.name;
 
-  const activeProgress = activeOrder ? STAGE_PROGRESS[activeOrder.status] : 0;
-  const activePill = activeOrder ? STATUS_PILL_MAP[activeOrder.status] : null;
+  const activeStatusMeta = activeOrder ? ORDER_STATUS_META[activeOrder.status] : null;
+  const activeProgress = activeStatusMeta?.progress ?? 0;
+
+  const isStatusOptionDisabled = (st: OrderStatus): boolean => {
+    if (!activeOrder || st === activeOrder.status) return false;
+    if (activeRole === 'technician') return st === 'delivered';
+    if (activeRole === 'receptionist') {
+      return st !== 'received' && st !== 'waiting_approval' && st !== 'delivered';
+    }
+    return false;
+  };
 
   return (
     <div className="space-y-5">
@@ -569,7 +707,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   : 'bg-white border-[#D8E4EC] text-slate-700 hover:bg-[#F4F6FB]'
               }`}
             >
-              {onlyMyOrders ? `Mis Órdenes (${techNameMatch})` : 'Filtrar: Mis Órdenes'}
+              {onlyMyOrders ? `Mis Órdenes (${techFilterLabel})` : 'Filtrar: Mis Órdenes'}
             </button>
           )}
         </div>
@@ -578,17 +716,29 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       {/* Master-Detail 2-Column Console */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
         {/* Left Master List */}
-        <div className="min-w-0 lg:col-span-5 xl:col-span-4 rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm overflow-hidden">
-          <div className="px-4 py-3.5 border-b border-[#D8E4EC]/70 bg-[#F4F6FB]/70 flex items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display text-sm font-semibold text-slate-900">
-                Listado de Órdenes ({filteredOrders.length})
-              </h2>
+        {!isOrderListCollapsed && (
+          <div className="min-w-0 lg:col-span-5 xl:col-span-4 rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm overflow-hidden">
+            <div className="px-4 py-3 border-b border-[#D8E4EC]/70 bg-[#F4F6FB]/70 flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <h2 className="font-display text-sm font-semibold text-slate-900 truncate">
+                  Listado de Órdenes ({filteredOrders.length})
+                </h2>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="font-mono text-[11px] font-medium text-slate-500">
+                  {activeBranchId === 'ALL' ? 'Consolidado' : branchMap.get(activeBranchId)?.code}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setIsOrderListCollapsed(true)}
+                  title="Minimizar listado de órdenes"
+                  aria-label="Minimizar listado de órdenes"
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-[#0A2463] hover:bg-white border border-transparent hover:border-[#D8E4EC] transition-colors"
+                >
+                  <PanelLeftClose className="h-4 w-4" />
+                </button>
+              </div>
             </div>
-            <span className="font-mono text-[11px] font-medium text-slate-500">
-              {activeBranchId === 'ALL' ? 'Consolidado' : branchMap.get(activeBranchId)?.code}
-            </span>
-          </div>
 
           {filteredOrders.length === 0 ? (
             <div className="p-8 text-center space-y-3">
@@ -614,7 +764,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                 const client = clientMap.get(order.client_id);
                 const asset = assetMap.get(order.asset_id);
                 const branch = branchMap.get(order.branch_id);
-                const pill = STATUS_PILL_MAP[order.status];
+                const pill = ORDER_STATUS_META[order.status];
                 const isSelected = activeOrder?.id === order.id;
                 const fin = calculateOrderFinancials(
                   order.items,
@@ -640,7 +790,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         {order.folio}
                       </span>
                       <span
-                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${pill.classes}`}
+                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold whitespace-nowrap ${pill.pillClasses}`}
                       >
                         {pill.shortLabel}
                       </span>
@@ -672,9 +822,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
             </div>
           )}
         </div>
+        )}
 
         {/* Right 3-Zone Editor */}
-        <div className="min-w-0 lg:col-span-7 xl:col-span-8 space-y-4">
+        <div
+          className={`min-w-0 space-y-4 ${
+            isOrderListCollapsed ? 'lg:col-span-12' : 'lg:col-span-7 xl:col-span-8'
+          }`}
+        >
           {!activeOrder || !financials ? (
             <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-12 text-center space-y-3">
               <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-[#EBF4FA] text-[#3E92CC]">
@@ -686,15 +841,27 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
               <p className="text-xs text-slate-500 max-w-md mx-auto">
                 La consola operativa de 3 Zonas permite editar cliente, diagnóstico, repuestos, pagos y evidencias en tiempo real.
               </p>
-              <button
-                type="button"
-                onClick={onOpenNewOrder}
-                disabled={!perms.canCreateOrder}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-4 py-2 text-xs font-semibold transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Nueva Orden</span>
-              </button>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                {isOrderListCollapsed && (
+                  <button
+                    type="button"
+                    onClick={() => setIsOrderListCollapsed(false)}
+                    className="inline-flex items-center gap-1.5 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] hover:bg-[#EBF4FA] text-[#0A2463] px-3.5 py-2 text-xs font-semibold transition-colors"
+                  >
+                    <PanelLeftOpen className="h-3.5 w-3.5 text-[#3E92CC]" />
+                    <span>Mostrar listado ({filteredOrders.length})</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onOpenNewOrder}
+                  disabled={!perms.canCreateOrder}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-4 py-2 text-xs font-semibold transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Nueva Orden</span>
+                </button>
+              </div>
             </div>
           ) : (
             <>
@@ -702,6 +869,17 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
               <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-5 space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-4">
                   <div className="flex items-start gap-3 min-w-0 flex-1">
+                    {isOrderListCollapsed && (
+                      <button
+                        type="button"
+                        onClick={() => setIsOrderListCollapsed(false)}
+                        title={`Mostrar listado de órdenes (${filteredOrders.length})`}
+                        aria-label={`Mostrar listado de órdenes (${filteredOrders.length})`}
+                        className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/80 text-slate-500 hover:text-[#0A2463] hover:border-[#3E92CC]/50 hover:bg-[#EBF4FA] transition-colors"
+                      >
+                        <PanelLeftOpen className="h-4 w-4" />
+                      </button>
+                    )}
                     <div
                       className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border ${sectorMeta.bg}`}
                     >
@@ -713,11 +891,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           <h2 className="font-mono text-xl font-bold text-[#0A2463] tracking-tight">
                             {activeOrder.folio}
                           </h2>
-                          {activePill && (
+                          {activeStatusMeta && (
                             <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${activePill.classes}`}
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${activeStatusMeta.pillClasses}`}
                             >
-                              {activePill.label}
+                              {activeStatusMeta.label}
                             </span>
                           )}
                           <button
@@ -740,14 +918,25 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             <select
                               id="order-status-select"
                               value={activeOrder.status}
-                              onChange={(e) =>
-                                patchOrder({ status: e.target.value as OrderStatus })
-                              }
+                              onChange={(e) => {
+                                const nextSt = e.target.value as OrderStatus;
+                                if (isStatusOptionDisabled(nextSt)) return;
+                                if (nextSt === 'delivered' && financials.balanceDue > 0) {
+                                  setPendingDeliveryWarning(true);
+                                  return;
+                                }
+                                setPendingDeliveryWarning(false);
+                                patchOrder({ status: nextSt });
+                              }}
                               className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                             >
                               {(Object.keys(ORDER_STATUS_META) as OrderStatus[]).map(
                                 (st) => (
-                                  <option key={st} value={st}>
+                                  <option
+                                    key={st}
+                                    value={st}
+                                    disabled={isStatusOptionDisabled(st)}
+                                  >
                                     {ORDER_STATUS_META[st].label}
                                   </option>
                                 )
@@ -842,6 +1031,40 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                     </div>
                   </div>
                 </div>
+
+                {pendingDeliveryWarning && perms.canDeliverOrder && (
+                  <div
+                    role="alert"
+                    className="rounded-xl bg-amber-50 border border-amber-200 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="text-amber-900 font-medium">
+                      La orden <span className="font-mono font-bold">{activeOrder.folio}</span> tiene un saldo pendiente de{' '}
+                      <span className="font-mono font-bold">
+                        {formatCurrency(financials.balanceDue, tenant.currency)}
+                      </span>
+                      . ¿Confirmas marcarla como Entregado?
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPendingDeliveryWarning(false)}
+                        className="rounded-lg border border-amber-300 bg-white hover:bg-amber-100/60 px-3 py-1.5 font-semibold text-amber-900 transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPendingDeliveryWarning(false);
+                          patchOrder({ status: 'delivered' });
+                        }}
+                        className="rounded-lg bg-[#0A2463] hover:bg-[#1E3A8A] px-3 py-1.5 font-semibold text-white transition-colors"
+                      >
+                        Confirmar Entrega con Saldo Pendiente
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Zone Switcher Tabs (All 3 Simultaneous vs Focus Tab) */}
@@ -912,33 +1135,55 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1 bg-[#F4F6FB] border border-[#D8E4EC] p-1 rounded-xl">
-                      <button
-                        type="button"
-                        onClick={() => patchOrder({ modality: 'workshop' })}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-                          activeOrder.modality === 'workshop'
-                            ? 'bg-white text-[#0A2463] shadow-sm'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        <Store className="h-3.5 w-3.5" />
-                        <span>Mostrador</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => patchOrder({ modality: 'home_service' })}
-                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
-                          activeOrder.modality === 'home_service'
-                            ? 'bg-white text-[#0A2463] shadow-sm'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        <Home className="h-3.5 w-3.5" />
-                        <span>Domicilio / Terreno</span>
-                      </button>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="flex items-center gap-1 bg-[#F4F6FB] border border-[#D8E4EC] p-1 rounded-xl">
+                        <button
+                          type="button"
+                          disabled={!perms.canManageClients}
+                          onClick={() => perms.canManageClients && patchOrder({ modality: 'workshop' })}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed ${
+                            activeOrder.modality === 'workshop'
+                              ? 'bg-white text-[#0A2463] shadow-sm'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <Store className="h-3.5 w-3.5" />
+                          <span>Mostrador</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!perms.canManageClients}
+                          onClick={() => perms.canManageClients && patchOrder({ modality: 'home_service' })}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap disabled:opacity-60 disabled:cursor-not-allowed ${
+                            activeOrder.modality === 'home_service'
+                              ? 'bg-white text-[#0A2463] shadow-sm'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          <Home className="h-3.5 w-3.5" />
+                          <span>Domicilio / Terreno</span>
+                        </button>
+                      </div>
+
+                      {perms.canManageClients && (
+                        <button
+                          type="button"
+                          disabled={!z1Dirty}
+                          onClick={handleSaveZone1}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-45 disabled:cursor-not-allowed px-3.5 py-2 text-xs font-semibold text-white transition-colors whitespace-nowrap"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                          <span>Confirmar Cambios</span>
+                        </button>
+                      )}
                     </div>
                   </div>
+
+                  {z1SavedMsg && !z1Dirty && (
+                    <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 px-3.5 py-2 text-xs font-semibold text-[#157A6E]">
+                      {z1SavedMsg}
+                    </div>
+                  )}
 
                   {activeOrder.modality === 'home_service' && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5 rounded-xl bg-[#EBF4FA]/60 border border-[#3E92CC]/25 p-4">
@@ -948,12 +1193,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         </label>
                         <input
                           type="text"
-                          value={activeOrder.visit_address ?? ''}
-                          onChange={(e) =>
-                            patchOrder({ visit_address: e.target.value })
-                          }
+                          disabled={!perms.canManageClients}
+                          value={orderZ1Draft.visit_address}
+                          onChange={(e) => {
+                            setOrderZ1Draft((d) => ({ ...d, visit_address: e.target.value }));
+                            setZ1Dirty(true);
+                            setZ1SavedMsg(null);
+                          }}
                           placeholder="Dirección exacta de atención"
-                          className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                          className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                         />
                       </div>
                       <div>
@@ -962,11 +1210,17 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         </label>
                         <input
                           type="datetime-local"
-                          value={activeOrder.visit_scheduled_at ?? ''}
-                          onChange={(e) =>
-                            patchOrder({ visit_scheduled_at: e.target.value })
-                          }
-                          className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                          disabled={!perms.canManageClients}
+                          value={orderZ1Draft.visit_scheduled_at}
+                          onChange={(e) => {
+                            setOrderZ1Draft((d) => ({
+                              ...d,
+                              visit_scheduled_at: e.target.value,
+                            }));
+                            setZ1Dirty(true);
+                            setZ1SavedMsg(null);
+                          }}
+                          className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono text-slate-800 focus:border-[#3E92CC] focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                         />
                       </div>
                     </div>
@@ -985,10 +1239,13 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeClient.name}
-                            onChange={(e) =>
-                              onUpdateClient({ ...activeClient, name: e.target.value })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={clientDraft.name}
+                            onChange={(e) => {
+                              setClientDraft((d) => ({ ...d, name: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={INPUT_CLASS}
                           />
                         </div>
@@ -998,10 +1255,13 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeClient.rut}
-                            onChange={(e) =>
-                              onUpdateClient({ ...activeClient, rut: e.target.value })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={clientDraft.rut}
+                            onChange={(e) => {
+                              setClientDraft((d) => ({ ...d, rut: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={`${INPUT_CLASS} font-mono`}
                           />
                         </div>
@@ -1011,10 +1271,13 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeClient.phone}
-                            onChange={(e) =>
-                              onUpdateClient({ ...activeClient, phone: e.target.value })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={clientDraft.phone}
+                            onChange={(e) => {
+                              setClientDraft((d) => ({ ...d, phone: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={`${INPUT_CLASS} font-mono`}
                           />
                         </div>
@@ -1024,29 +1287,45 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="email"
-                            value={activeClient.email}
-                            onChange={(e) =>
-                              onUpdateClient({ ...activeClient, email: e.target.value })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={clientDraft.email}
+                            onChange={(e) => {
+                              setClientDraft((d) => ({ ...d, email: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={INPUT_CLASS}
                           />
                         </div>
-                        <div className="sm:col-span-2">
+                        <div>
                           <label className="block text-[11px] font-medium text-slate-500 mb-1">
-                            Dirección / Ciudad
+                            Dirección
                           </label>
                           <input
                             type="text"
-                            value={`${activeClient.address}${
-                              activeClient.city ? `, ${activeClient.city}` : ''
-                            }`}
-                            onChange={(e) =>
-                              onUpdateClient({
-                                ...activeClient,
-                                address: e.target.value,
-                                city: '',
-                              })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={clientDraft.address}
+                            onChange={(e) => {
+                              setClientDraft((d) => ({ ...d, address: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
+                            className={INPUT_CLASS}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-slate-500 mb-1">
+                            Ciudad
+                          </label>
+                          <input
+                            type="text"
+                            disabled={!perms.canManageClients}
+                            value={clientDraft.city}
+                            onChange={(e) => {
+                              setClientDraft((d) => ({ ...d, city: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={INPUT_CLASS}
                           />
                         </div>
@@ -1065,13 +1344,13 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeAsset.category}
-                            onChange={(e) =>
-                              onUpdateAsset({
-                                ...activeAsset,
-                                category: e.target.value,
-                              })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={assetDraft.category}
+                            onChange={(e) => {
+                              setAssetDraft((d) => ({ ...d, category: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={INPUT_CLASS}
                           />
                         </div>
@@ -1082,25 +1361,25 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           <div className="grid grid-cols-2 gap-2">
                             <input
                               type="text"
-                              value={activeAsset.brand}
-                              onChange={(e) =>
-                                onUpdateAsset({
-                                  ...activeAsset,
-                                  brand: e.target.value,
-                                })
-                              }
+                              disabled={!perms.canManageClients}
+                              value={assetDraft.brand}
+                              onChange={(e) => {
+                                setAssetDraft((d) => ({ ...d, brand: e.target.value }));
+                                setZ1Dirty(true);
+                                setZ1SavedMsg(null);
+                              }}
                               placeholder="Marca"
                               className={INPUT_CLASS}
                             />
                             <input
                               type="text"
-                              value={activeAsset.model}
-                              onChange={(e) =>
-                                onUpdateAsset({
-                                  ...activeAsset,
-                                  model: e.target.value,
-                                })
-                              }
+                              disabled={!perms.canManageClients}
+                              value={assetDraft.model}
+                              onChange={(e) => {
+                                setAssetDraft((d) => ({ ...d, model: e.target.value }));
+                                setZ1Dirty(true);
+                                setZ1SavedMsg(null);
+                              }}
                               placeholder="Modelo"
                               className={INPUT_CLASS}
                             />
@@ -1112,13 +1391,13 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeAsset.serial_imei}
-                            onChange={(e) =>
-                              onUpdateAsset({
-                                ...activeAsset,
-                                serial_imei: e.target.value,
-                              })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={assetDraft.serial_imei}
+                            onChange={(e) => {
+                              setAssetDraft((d) => ({ ...d, serial_imei: e.target.value }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={`${INPUT_CLASS} font-mono`}
                           />
                         </div>
@@ -1129,22 +1408,31 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           <div className="grid grid-cols-5 gap-2">
                             <input
                               type="text"
-                              value={activeAsset.password_pattern ?? ''}
-                              onChange={(e) =>
-                                onUpdateAsset({
-                                  ...activeAsset,
+                              disabled={!perms.canManageClients}
+                              value={assetDraft.password_pattern}
+                              onChange={(e) => {
+                                setAssetDraft((d) => ({
+                                  ...d,
                                   password_pattern: e.target.value,
-                                })
-                              }
+                                }));
+                                setZ1Dirty(true);
+                                setZ1SavedMsg(null);
+                              }}
                               placeholder="Clave"
                               className={`${INPUT_CLASS} col-span-2 font-mono`}
                             />
                             <input
                               type="text"
-                              value={activeOrder.assigned_technician}
-                              onChange={(e) =>
-                                patchOrder({ assigned_technician: e.target.value })
-                              }
+                              disabled={!perms.canManageClients}
+                              value={orderZ1Draft.assigned_technician}
+                              onChange={(e) => {
+                                setOrderZ1Draft((d) => ({
+                                  ...d,
+                                  assigned_technician: e.target.value,
+                                }));
+                                setZ1Dirty(true);
+                                setZ1SavedMsg(null);
+                              }}
                               placeholder="Técnico"
                               className={`${INPUT_CLASS} col-span-3`}
                             />
@@ -1156,10 +1444,16 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeOrder.accessories_received}
-                            onChange={(e) =>
-                              patchOrder({ accessories_received: e.target.value })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={orderZ1Draft.accessories_received}
+                            onChange={(e) => {
+                              setOrderZ1Draft((d) => ({
+                                ...d,
+                                accessories_received: e.target.value,
+                              }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={INPUT_CLASS}
                           />
                         </div>
@@ -1169,10 +1463,16 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeOrder.entry_condition}
-                            onChange={(e) =>
-                              patchOrder({ entry_condition: e.target.value })
-                            }
+                            disabled={!perms.canManageClients}
+                            value={orderZ1Draft.entry_condition}
+                            onChange={(e) => {
+                              setOrderZ1Draft((d) => ({
+                                ...d,
+                                entry_condition: e.target.value,
+                              }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             className={INPUT_CLASS}
                           />
                         </div>
@@ -1193,18 +1493,22 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           </label>
                           <input
                             type="text"
-                            value={activeAsset.custom_attributes[field.key] ?? ''}
-                            onChange={(e) =>
-                              onUpdateAsset({
-                                ...activeAsset,
+                            disabled={!perms.canManageClients}
+                            value={assetDraft.custom_attributes[field.key] ?? ''}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setAssetDraft((d) => ({
+                                ...d,
                                 custom_attributes: {
-                                  ...activeAsset.custom_attributes,
-                                  [field.key]: e.target.value,
+                                  ...d.custom_attributes,
+                                  [field.key]: val,
                                 },
-                              })
-                            }
+                              }));
+                              setZ1Dirty(true);
+                              setZ1SavedMsg(null);
+                            }}
                             placeholder={field.placeholder}
-                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#3E92CC] focus:outline-none transition-colors"
+                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 placeholder:text-slate-400 focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-70 disabled:cursor-not-allowed"
                           />
                         </div>
                       ))}
@@ -1228,29 +1532,47 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         Zona 2 — Diagnóstico Técnico, Repuestos Híbridos y Liquidación
                       </h3>
                     </div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex flex-wrap items-center gap-3">
                       <label className="inline-flex items-center gap-2 text-xs text-slate-600">
                         <span className="font-medium">Garantía (días):</span>
                         <input
                           type="number"
                           min={0}
                           max={730}
-                          value={activeOrder.warranty_days ?? tenant.warranty_days ?? 90}
-                          onChange={(e) =>
-                            patchOrder({
+                          disabled={!perms.canManageClients}
+                          value={orderZ2Draft.warranty_days}
+                          onChange={(e) => {
+                            setOrderZ2Draft((d) => ({
+                              ...d,
                               warranty_days: Math.max(0, Number(e.target.value) || 0),
-                            })
-                          }
-                          className="w-16 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/70 px-2.5 py-1.5 text-right font-mono text-xs tabular-nums focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                            }));
+                            setZ2Dirty(true);
+                            setZ2SavedMsg(null);
+                          }}
+                          className="w-16 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/70 px-2.5 py-1.5 text-right font-mono text-xs tabular-nums focus:bg-white focus:border-[#3E92CC] focus:outline-none disabled:opacity-70 disabled:cursor-not-allowed"
                         />
                       </label>
-                      <span className="text-[11px] font-medium text-slate-400 hidden sm:inline">
-                        Guardado automático
-                      </span>
+                      {(perms.canManageClients || perms.canEditDiagnosis) && (
+                        <button
+                          type="button"
+                          disabled={!z2Dirty}
+                          onClick={handleSaveZone2}
+                          className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] disabled:opacity-45 disabled:cursor-not-allowed px-3.5 py-1.5 text-xs font-semibold text-white transition-colors whitespace-nowrap"
+                        >
+                          <Check className="h-3.5 w-3.5" />
+                          <span>Guardar Diagnóstico</span>
+                        </button>
+                      )}
                     </div>
                   </div>
 
-                  {/* 4 Classic CP Reparaciones Textareas */}
+                  {z2SavedMsg && !z2Dirty && (
+                    <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 px-3.5 py-2 text-xs font-semibold text-[#157A6E]">
+                      {z2SavedMsg}
+                    </div>
+                  )}
+
+                  {/* 4 Classic FIXICLOUD Diagnostic Textareas */}
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-xs font-semibold text-slate-700 mb-1.5">
@@ -1258,10 +1580,16 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       </label>
                       <textarea
                         rows={3}
-                        value={activeOrder.reported_symptoms}
-                        onChange={(e) =>
-                          patchOrder({ reported_symptoms: e.target.value })
-                        }
+                        disabled={!perms.canManageClients}
+                        value={orderZ2Draft.reported_symptoms}
+                        onChange={(e) => {
+                          setOrderZ2Draft((d) => ({
+                            ...d,
+                            reported_symptoms: e.target.value,
+                          }));
+                          setZ2Dirty(true);
+                          setZ2SavedMsg(null);
+                        }}
                         className={`${INPUT_CLASS} leading-relaxed`}
                       />
                     </div>
@@ -1272,10 +1600,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       <textarea
                         rows={3}
                         disabled={!perms.canEditDiagnosis}
-                        value={activeOrder.technical_diagnosis}
-                        onChange={(e) =>
-                          patchOrder({ technical_diagnosis: e.target.value })
-                        }
+                        value={orderZ2Draft.technical_diagnosis}
+                        onChange={(e) => {
+                          setOrderZ2Draft((d) => ({
+                            ...d,
+                            technical_diagnosis: e.target.value,
+                          }));
+                          setZ2Dirty(true);
+                          setZ2SavedMsg(null);
+                        }}
                         placeholder="Evaluación técnica de la falla..."
                         className={`${INPUT_CLASS} leading-relaxed disabled:opacity-60`}
                       />
@@ -1287,10 +1620,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       <textarea
                         rows={2}
                         disabled={!perms.canEditDiagnosis}
-                        value={activeOrder.work_performed}
-                        onChange={(e) =>
-                          patchOrder({ work_performed: e.target.value })
-                        }
+                        value={orderZ2Draft.work_performed}
+                        onChange={(e) => {
+                          setOrderZ2Draft((d) => ({
+                            ...d,
+                            work_performed: e.target.value,
+                          }));
+                          setZ2Dirty(true);
+                          setZ2SavedMsg(null);
+                        }}
                         placeholder="Detalle de reparación ejecutada..."
                         className={`${INPUT_CLASS} leading-relaxed disabled:opacity-60`}
                       />
@@ -1301,12 +1639,18 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       </label>
                       <textarea
                         rows={2}
-                        value={activeOrder.parts_and_observations}
-                        onChange={(e) =>
-                          patchOrder({ parts_and_observations: e.target.value })
-                        }
+                        disabled={!perms.canEditDiagnosis}
+                        value={orderZ2Draft.parts_and_observations}
+                        onChange={(e) => {
+                          setOrderZ2Draft((d) => ({
+                            ...d,
+                            parts_and_observations: e.target.value,
+                          }));
+                          setZ2Dirty(true);
+                          setZ2SavedMsg(null);
+                        }}
                         placeholder="Observaciones visibles en comprobante de salida..."
-                        className={`${INPUT_CLASS} leading-relaxed`}
+                        className={`${INPUT_CLASS} leading-relaxed disabled:opacity-60`}
                       />
                     </div>
                   </div>
@@ -1323,6 +1667,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                     </div>
 
                     {/* Add from Stock vs Free Item */}
+                    {stockErrorMsg && (
+                      <div className="rounded-xl bg-[#FDEDED] border border-[#D64545]/30 px-3.5 py-2 text-xs font-semibold text-[#D64545]">
+                        {stockErrorMsg}
+                      </div>
+                    )}
                     {perms.canEditFinancials && (
                       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3.5">
                         {/* From Stock */}
@@ -1501,6 +1850,15 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         </h4>
                       </div>
 
+                      {paymentErrorMsg && (
+                        <div
+                          role="alert"
+                          className="rounded-xl bg-[#FDEDED] border border-[#D64545]/30 px-3.5 py-2 text-xs font-semibold text-[#D64545]"
+                        >
+                          {paymentErrorMsg}
+                        </div>
+                      )}
+
                       {perms.canReceivePayments && (
                         <form
                           onSubmit={handleAddPayment}
@@ -1510,7 +1868,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             type="number"
                             min={1}
                             value={payAmount}
-                            onChange={(e) => setPayAmount(e.target.value)}
+                            onChange={(e) => {
+                              setPayAmount(e.target.value);
+                              setPaymentErrorMsg(null);
+                            }}
                             placeholder="Monto abono"
                             className="w-28 rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-mono focus:border-[#3E92CC] focus:outline-none"
                           />
@@ -1550,7 +1911,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           {activeOrder.payments.map((p) => (
                             <div
                               key={p.id}
-                              className="px-3.5 py-2.5 flex items-center justify-between text-xs"
+                              className="px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs"
                             >
                               <div className="min-w-0">
                                 <span className="font-mono text-slate-500">
@@ -1571,9 +1932,21 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                   </span>
                                 )}
                               </div>
-                              <span className="font-mono font-bold text-[#1B998B] tabular-nums whitespace-nowrap">
-                                {formatCurrency(p.amount, tenant.currency)}
-                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <span className="font-mono font-bold text-[#1B998B] tabular-nums whitespace-nowrap">
+                                  {formatCurrency(p.amount, tenant.currency)}
+                                </span>
+                                {canDeletePayments && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeletePayment(p.id)}
+                                    aria-label={`Eliminar abono de ${formatCurrency(p.amount, tenant.currency)}`}
+                                    className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -1585,7 +1958,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       <div className="flex items-center justify-between pb-2.5 border-b border-[#D8E4EC]">
                         <label
                           htmlFor="iva-toggle"
-                          className="text-xs font-semibold text-slate-800 cursor-pointer select-none"
+                          className={`text-xs font-semibold text-slate-800 select-none ${
+                            perms.canEditFinancials ? 'cursor-pointer' : 'cursor-default'
+                          }`}
                         >
                           Aplicar / Desglosar IVA ({tenant.iva_rate}%)
                         </label>
@@ -1594,12 +1969,14 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           type="button"
                           role="switch"
                           aria-checked={activeOrder.apply_iva}
-                          onClick={() =>
-                            patchOrder({ apply_iva: !activeOrder.apply_iva })
-                          }
-                          className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                            activeOrder.apply_iva ? 'bg-[#1B998B]' : 'bg-slate-300'
-                          }`}
+                          disabled={!perms.canEditFinancials}
+                          onClick={() => {
+                            if (!perms.canEditFinancials) return;
+                            patchOrder({ apply_iva: !activeOrder.apply_iva });
+                          }}
+                          className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors disabled:opacity-55 disabled:cursor-not-allowed ${
+                            perms.canEditFinancials ? 'cursor-pointer' : ''
+                          } ${activeOrder.apply_iva ? 'bg-[#1B998B]' : 'bg-slate-300'}`}
                         >
                           <span
                             className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
@@ -1622,17 +1999,20 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           id="discount-input"
                           type="number"
                           min={0}
+                          max={financials.subtotal}
                           disabled={!perms.canEditFinancials}
                           value={activeOrder.discount_amount}
-                          onChange={(e) =>
+                          onChange={(e) => {
+                            if (!perms.canEditFinancials) return;
+                            const raw = Number(e.target.value);
+                            const clamped = Number.isFinite(raw)
+                              ? Math.min(financials.subtotal, Math.max(0, raw))
+                              : 0;
                             patchOrder({
-                              discount_amount: Math.max(
-                                0,
-                                Number(e.target.value) || 0
-                              ),
-                            })
-                          }
-                          className="w-28 rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-right font-mono text-xs tabular-nums focus:border-[#3E92CC] focus:outline-none"
+                              discount_amount: clamped,
+                            });
+                          }}
+                          className="w-28 rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-right font-mono text-xs tabular-nums focus:border-[#3E92CC] focus:outline-none disabled:bg-[#F4F6FB] disabled:text-slate-500 disabled:cursor-not-allowed"
                         />
                       </div>
 
@@ -1811,14 +2191,16 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                     {photo.caption}
                                   </p>
                                 </div>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeletePhoto(photo.id)}
-                                  aria-label={`Eliminar foto ${photo.caption}`}
-                                  className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 shrink-0 transition-colors"
-                                >
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                </button>
+                                {perms.canDeletePhotos && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeletePhoto(photo.id)}
+                                    aria-label={`Eliminar foto ${photo.caption}`}
+                                    className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 shrink-0 transition-colors"
+                                  >
+                                    <Trash2 className="h-3.5 w-3.5" />
+                                  </button>
+                                )}
                               </div>
                             </div>
                           ))}
@@ -1854,14 +2236,20 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               </div>
                             )}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => onReturnLoanAsset(activeOrder.id)}
-                            className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span>Registrar Devolución del Equipo</span>
-                          </button>
+                          {perms.canManageOrderLoans ? (
+                            <button
+                              type="button"
+                              onClick={() => onReturnLoanAsset(activeOrder.id)}
+                              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
+                            >
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                              <span>Registrar Devolución del Equipo</span>
+                            </button>
+                          ) : (
+                            <div className="rounded-xl bg-white/80 border border-amber-200/80 px-3 py-2 text-[11px] text-amber-900">
+                              Devolución gestionada por Recepción o Administración.
+                            </div>
+                          )}
                         </div>
                       ) : activeOrder.loan?.returned_at ? (
                         <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 p-4 space-y-1">
@@ -1879,7 +2267,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             ).toLocaleDateString('es-CL')}
                           </div>
                         </div>
-                      ) : (
+                      ) : perms.canManageOrderLoans ? (
                         <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 space-y-3">
                           <p className="text-xs text-slate-600 leading-relaxed">
                             Asigna un equipo de respaldo disponible mientras se repara el equipo del cliente.
@@ -1924,6 +2312,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                           >
                             Asignar Equipo en Préstamo
                           </button>
+                        </div>
+                      ) : (
+                        <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 text-xs text-slate-600 leading-relaxed">
+                          Sin equipo en préstamo asignado. La asignación o devolución de equipos en préstamo corresponde a Recepción o Administración.
                         </div>
                       )}
                     </div>

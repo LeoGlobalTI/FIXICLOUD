@@ -17,9 +17,11 @@ import {
   hasLegacyNonUuidIds,
   mapAppUserFromDb,
   mapAppUserToDb,
+  mapAppUserUpdateWithoutPasswordToDb,
   mapAppointmentFromDb,
   mapAppointmentToDb,
   mapAssetToDb,
+  mapBranchToDb,
   mapBranchesToDbSafe,
   mapCatalogItemToDb,
   mapClientToDb,
@@ -29,11 +31,13 @@ import {
   mapOrderPaymentFromDb,
   mapOrderPhotoFromDb,
   mapTenantToDb,
+  mapWorkOrderFromDb,
   mapWorkOrderItemToDb,
   mapWorkOrderLoanToDb,
   mapWorkOrderPaymentToDb,
   mapWorkOrderPhotoToDb,
   mapWorkOrderToDb,
+  stripOptionalBranchColumns,
 } from './supabaseMappers';
 
 const sampleTenant: Tenant = {
@@ -582,5 +586,101 @@ describe('PostgreSQL Exact Column Mappers', () => {
       }),
       false
     );
+
+    const passwordless = mapAppUserUpdateWithoutPasswordToDb(companyAdmin) as unknown as Record<
+      string,
+      unknown
+    >;
+    assert.equal('pin_or_password' in passwordless, false);
+    assert.equal(passwordless.username, 'carolina');
+    assert.equal(passwordless.role, 'company_admin');
+  });
+
+  it('mapBranchToDb includes city/business_hours and stripOptionalBranchColumns strips them cleanly', () => {
+    const dbBranch = mapBranchToDb({
+      id: '11111111-1111-4111-8111-111111111101',
+      tenant_id: sampleTenant.id,
+      name: 'Sucursal Norte',
+      code: 'SUC-NORTE',
+      is_hq: false,
+      address: 'Av. Libertad 200',
+      city: 'Viña del Mar',
+      phone: '+56 32 222 1111',
+      business_hours: 'Lun-Vie 09:00-18:00',
+    });
+    assert.equal(dbBranch.city, 'Viña del Mar');
+    assert.equal(dbBranch.business_hours, 'Lun-Vie 09:00-18:00');
+
+    const stripped = stripOptionalBranchColumns(dbBranch) as unknown as Record<
+      string,
+      unknown
+    >;
+    assert.equal('city' in stripped, false);
+    assert.equal('business_hours' in stripped, false);
+    assert.equal(stripped.name, 'Sucursal Norte');
+  });
+
+  it('normalizes timezone offsets on appointments and round-trips work order promised_at for datetime-local input', () => {
+    const mappedApt = mapAppointmentFromDb({
+      id: sampleAppointment.id,
+      tenant_id: sampleAppointment.tenant_id,
+      branch_id: sampleAppointment.branch_id,
+      client_id: sampleAppointment.client_id,
+      title: 'Visita terreno',
+      scheduled_start: '2026-11-14T13:00:00+03:00',
+      scheduled_end: '2026-11-14T14:30:00+03:00',
+      status: 'scheduled',
+    });
+    assert.equal(mappedApt.date, '2026-11-14');
+    assert.equal(mappedApt.start_time, '10:00');
+    assert.equal(mappedApt.end_time, '11:30');
+
+    const scheduledIso = '2026-11-15T14:30';
+    const dbWo = mapWorkOrderToDb(
+      {
+        ...sampleWorkOrder,
+        modality: 'home_service',
+        visit_address: 'Av. Alemania 540',
+        visit_scheduled_at: scheduledIso,
+      },
+      19
+    );
+    assert.ok(dbWo.promised_at);
+    const parsedFromDb = mapWorkOrderFromDb(
+      dbWo as unknown as Record<string, unknown>,
+      { items: [], payments: [], photos: [] }
+    );
+    assert.match(parsedFromDb.visit_scheduled_at ?? '', /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+    const expectedLocal = (() => {
+      const d = new Date(String(dbWo.promised_at));
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+        d.getHours()
+      )}:${pad(d.getMinutes())}`;
+    })();
+    assert.equal(parsedFromDb.visit_scheduled_at, expectedLocal);
+  });
+
+  it('mapWorkOrderItemToDb maps service catalog items to item_type="service" with deducted_from_stock=false', () => {
+    const serviceDb = mapWorkOrderItemToDb(
+      {
+        id: generateUUID(),
+        source: 'catalog',
+        catalog_item_id: generateUUID(),
+        sku: 'SRV-PRE-ARR',
+        description: 'Servicio Pre-Arriendo',
+        qty: 1,
+        unit_price: 29900,
+      },
+      {
+        tenantId: sampleTenant.id,
+        workOrderId: sampleWorkOrder.id,
+        catalogItemType: 'service',
+      }
+    );
+    assert.equal(serviceDb.item_type, 'service');
+    assert.equal(serviceDb.deducted_from_stock, false);
   });
 });
+
+

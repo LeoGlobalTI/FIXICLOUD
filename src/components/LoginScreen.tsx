@@ -7,7 +7,8 @@ import type {
   SupabaseConfig,
   Tenant,
 } from '../types/erp';
-import { isSupabaseLive, loginWithAppUsers } from '../services/supabaseService';
+import { isSupabaseLive } from '../services/supabaseService';
+import { authenticateUser } from '../utils/authHelper';
 import { AlertBanner } from './ui/AlertBanner';
 
 interface LoginScreenProps {
@@ -37,61 +38,21 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-
-    const cleanUsername = username.trim();
-    const cleanPassword = password.trim();
-
-    if (!cleanUsername || !cleanPassword) {
-      setErrorMsg('Ingresa tu usuario y contraseña / PIN para continuar.');
-      return;
-    }
-
-    if (liveMode) {
-      setLoading(true);
-      const res = await loginWithAppUsers(supabaseConfig, cleanUsername, cleanPassword);
-      setLoading(false);
-      if (!res.ok || !res.user) {
-        setErrorMsg(
-          res.error ?? 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.'
-        );
-        return;
-      }
-      onAuthSuccess(res.user);
-      return;
-    }
-
-    // Demo Local Mode: validate against local appUsers mirror
-    const matched = appUsers.find(
-      (u) =>
-        u.username.trim().toLowerCase() === cleanUsername.toLowerCase() &&
-        u.pin_or_password.trim() === cleanPassword &&
-        u.is_active
-    );
-
-    if (!matched) {
-      setErrorMsg('Usuario o contraseña/PIN incorrectos, o cuenta inactiva.');
-      return;
-    }
-
-    const matchedTenant = matched.tenant_id
-      ? tenants.find((t) => t.id === matched.tenant_id) ?? null
-      : null;
-    const matchedBranch = matched.branch_id
-      ? branches.find((b) => b.id === matched.branch_id) ?? null
-      : null;
-
-    onAuthSuccess({
-      id: matched.id,
-      username: matched.username,
-      full_name: matched.full_name,
-      tenant_id: matched.tenant_id,
-      branch_id: matched.branch_id,
-      role: matched.role,
-      is_active: matched.is_active,
-      mode: 'demo',
-      tenant: matchedTenant,
-      branch: matchedBranch,
+    setLoading(true);
+    const res = await authenticateUser({
+      supabaseConfig,
+      appUsers,
+      tenants,
+      branches,
+      username,
+      password,
     });
+    setLoading(false);
+    if (!res.ok) {
+      setErrorMsg(res.error);
+      return;
+    }
+    onAuthSuccess(res.user);
   };
 
   return (
@@ -122,10 +83,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </svg>
           </div>
           <h1 className="font-display text-xl font-bold tracking-tight">
-            FIXICLOUD
+            FixiCloud
           </h1>
           <p className="text-xs text-[#D8E4EC]/80">
-            Cloud Technical Service &amp; Repair ERP
+            Cloud Technical Service &amp; Repair FixiCloud
           </p>
           <div className="pt-2">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium text-[#D8E4EC]">
@@ -215,8 +176,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         </div>
       </div>
 
-      <footer className="mt-6 text-center text-xs text-slate-500">
-        FIXICLOUD Enterprise ERP · Acceso Restringido y Protegido por Credenciales
+      <footer className="mt-6 text-center text-xs text-slate-500 space-y-1">
+        <div>FixiCloud Enterprise · Acceso Restringido y Protegido por Credenciales</div>
+        <div>
+          Desarrollado por{' '}
+          <a
+            href="https://www.gtitech.cl"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-semibold text-[#3E92CC] hover:underline"
+          >
+            Global TI SPA
+          </a>
+        </div>
       </footer>
     </div>
   );

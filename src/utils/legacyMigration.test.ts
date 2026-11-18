@@ -39,7 +39,6 @@ const baseState: ErpState = {
       business_hours: '',
     },
   ],
-  profiles: [],
   appUsers: [],
   clients: [
     {
@@ -63,12 +62,12 @@ const baseState: ErpState = {
 test('parseLegacyCsv parses semicolon-separated Access export rows', () => {
   const csv = [
     'IdOrden;Cliente;Telefono;Direccion;Equipo;Marca;Modelo;Serie;Sintomas;Diagnostico;Repuestos;Importe;Abono;Fecha;Estado',
-    'CP-9001;Juan Perez;987654321;Av Central 10;Notebook;Acer;Aspire 5;SN991;No enciende;Placa en corto;Cambio MOSFET;65000;20000;2026-02-10;Listo',
+    'FX-9001;Juan Perez;987654321;Av Central 10;Notebook;Acer;Aspire 5;SN991;No enciende;Placa en corto;Cambio MOSFET;65000;20000;2026-02-10;Listo',
   ].join('\n');
 
   const rows = parseLegacyCsv(csv);
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].legacyId, 'CP-9001');
+  assert.equal(rows[0].legacyId, 'FX-9001');
   assert.equal(rows[0].clientName, 'Juan Perez');
   assert.equal(rows[0].totalAmount, 65000);
   assert.equal(rows[0].paidAmount, 20000);
@@ -77,7 +76,7 @@ test('parseLegacyCsv parses semicolon-separated Access export rows', () => {
 
 test('buildMigrationPreview deduplicates existing and in-batch clients and skips duplicate legacy_mdb_id', () => {
   const preview = buildMigrationPreview(baseState, SIMULATED_MDB_RECORDS, 't1', [
-    { name: 'CP-4013_fusor.jpg', dataUrl: 'data:image/png;base64,AAA' },
+    { name: 'FX-4013_fusor.jpg', dataUrl: 'data:image/png;base64,AAA' },
   ]);
 
   assert.equal(preview.length, 4);
@@ -96,6 +95,9 @@ test('buildMigrationPreview deduplicates existing and in-batch clients and skips
   assert.equal(exec.importedOrders, 4);
   assert.equal(exec.createdClients, 2); // Transportes del Cachapoal + Andrés Morales
   assert.equal(exec.attachedPhotos, 1);
+  assert.equal(exec.createdClientsList.length, 2);
+  assert.equal(exec.createdAssetsList.length, 4);
+  assert.equal(exec.createdOrdersList.length, 4);
 
   // Re-running preview on updated state detects all 4 orders as duplicates
   const secondPreview = buildMigrationPreview(
@@ -116,3 +118,16 @@ test('scanMdbBinaryStrings extracts table signatures from binary buffer', () => 
   assert.equal(res.detectedTables.includes('Reparaciones'), true);
   assert.equal(res.records.length > 0, true);
 });
+
+test('parseLegacyCsv unescapes RFC-4180 doubled quotes inside quoted cells', () => {
+  const csv = [
+    'IdOrden;Cliente;Telefono;Direccion;Equipo;Marca;Modelo;Serie;Sintomas;Diagnostico;Repuestos;Importe;Abono;Fecha;Estado',
+    'FX-9002;"Empresa ""Andes"" SpA";987654321;Av 1;Notebook;HP;ProBook;SN-1;"Pantalla ""parpadea"" al abrir";Flex dañado;;85000;0;2026-03-01;Pendiente',
+  ].join('\n');
+
+  const rows = parseLegacyCsv(csv);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].clientName, 'Empresa "Andes" SpA');
+  assert.equal(rows[0].symptoms, 'Pantalla "parpadea" al abrir');
+});
+

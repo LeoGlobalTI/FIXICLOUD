@@ -1,5 +1,6 @@
 import type { AuthSessionUser, ErpState, SupabaseConfig } from '../types/erp';
 import { SEED_ERP_STATE } from '../data/seedData';
+import { mergeMissingSeedTenants } from '../utils/erpLogic';
 import { hasLegacyNonUuidIds } from '../utils/supabaseMappers';
 import { isValidUUID } from '../utils/uuid';
 
@@ -7,7 +8,7 @@ const ERP_STATE_KEY = 'fixicloud_erp_state_v1';
 const SUPABASE_CFG_KEY = 'fixicloud_supabase_cfg_v1';
 const AUTH_SESSION_KEY = 'fixicloud_auth_session_v1';
 
-export function getEnvSupabaseCredentials(): { url: string; anonKey: string } {
+function getEnvSupabaseCredentials(): { url: string; anonKey: string } {
   const env = (import.meta as unknown as { env?: Record<string, string | undefined> })?.env;
   return {
     url: (env?.VITE_SUPABASE_URL ?? '').trim(),
@@ -50,21 +51,34 @@ export function loadErpState(): ErpState {
       localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
       return SEED_ERP_STATE;
     }
-    return {
+    const normalized: ErpState = {
       ...parsed,
-      profiles: parsed.profiles ?? SEED_ERP_STATE.profiles,
       appUsers: parsed.appUsers?.length ? parsed.appUsers : SEED_ERP_STATE.appUsers,
       appointments: parsed.appointments ?? SEED_ERP_STATE.appointments,
     };
+    const merged = mergeMissingSeedTenants(normalized, SEED_ERP_STATE);
+    if (merged.changed) {
+      localStorage.setItem(ERP_STATE_KEY, JSON.stringify(merged.state));
+    }
+    return merged.state;
   } catch {
     localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
     return SEED_ERP_STATE;
   }
 }
 
-export function saveErpState(state: ErpState): void {
+export function saveErpState(
+  state: ErpState,
+  options?: { stripCredentials?: boolean }
+): void {
   try {
-    localStorage.setItem(ERP_STATE_KEY, JSON.stringify(state));
+    const toPersist = options?.stripCredentials
+      ? {
+          ...state,
+          appUsers: state.appUsers.map((u) => ({ ...u, pin_or_password: '' })),
+        }
+      : state;
+    localStorage.setItem(ERP_STATE_KEY, JSON.stringify(toPersist));
   } catch {
     // Ignore storage quota errors cleanly
   }
@@ -169,3 +183,36 @@ export function saveAuthSession(user: AuthSessionUser | null): void {
     // Ignore
   }
 }
+
+const SYNCED_SEED_TENANTS_KEY = 'fixicloud_synced_seed_tenants_v1';
+
+export function getSyncedSeedTenantsForUrl(url: string): string[] {
+  const cleanUrl = url.trim().replace(/\/+$/, '');
+  if (!cleanUrl) return [];
+  try {
+    const raw = localStorage.getItem(SYNCED_SEED_TENANTS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Record<string, string[]>;
+    return Array.isArray(parsed[cleanUrl]) ? parsed[cleanUrl] : [];
+  } catch {
+    return [];
+  }
+}
+
+export function markSeedTenantsSyncedForUrl(
+  url: string,
+  tenantIds: string[]
+): void {
+  const cleanUrl = url.trim().replace(/\/+$/, '');
+  if (!cleanUrl || tenantIds.length === 0) return;
+  try {
+    const raw = localStorage.getItem(SYNCED_SEED_TENANTS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
+    const merged = new Set([...(parsed[cleanUrl] ?? []), ...tenantIds]);
+    parsed[cleanUrl] = Array.from(merged);
+    localStorage.setItem(SYNCED_SEED_TENANTS_KEY, JSON.stringify(parsed));
+  } catch {
+    // Ignore
+  }
+}
+

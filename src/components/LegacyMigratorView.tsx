@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Database,
   FileSpreadsheet,
@@ -14,6 +14,7 @@ import type {
   Tenant,
 } from '../types/erp';
 import { formatCurrency } from '../utils/erpLogic';
+import { compressImageToWebP } from '../utils/imageCompression';
 import {
   type LegacyMdbRecord,
   type LegacyPhotoUpload,
@@ -23,7 +24,11 @@ import {
   parseLegacyCsv,
   scanMdbBinaryStrings,
 } from '../utils/legacyMigration';
-import { upsertMigratedDataToSupabase } from '../services/supabaseService';
+import {
+  isSupabaseLive,
+  uploadOrderPhotoToStorage,
+  upsertMigratedDataToSupabase,
+} from '../services/supabaseService';
 import { AlertBanner } from './ui/AlertBanner';
 
 interface LegacyMigratorViewProps {
@@ -31,6 +36,7 @@ interface LegacyMigratorViewProps {
   activeTenant: Tenant;
   branches: Branch[];
   supabaseConfig: SupabaseConfig;
+  allowGlobalView?: boolean;
   onApplyMigratedState: (nextState: ErpState) => void;
   onGoToConsole: () => void;
 }
@@ -40,20 +46,38 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
   activeTenant,
   branches,
   supabaseConfig,
+  allowGlobalView = false,
   onApplyMigratedState,
   onGoToConsole,
 }) => {
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [targetTenantId, setTargetTenantId] = useState(activeTenant.id);
-  const tenantBranches = branches.filter((b) => b.tenant_id === targetTenantId);
+  const visibleTenants = useMemo(
+    () => (allowGlobalView ? erpState.tenants : [activeTenant]),
+    [allowGlobalView, erpState.tenants, activeTenant]
+  );
+  const tenantBranches = useMemo(
+    () => branches.filter((b) => b.tenant_id === targetTenantId),
+    [branches, targetTenantId]
+  );
   const [targetBranchId, setTargetBranchId] = useState(
     tenantBranches.find((b) => b.is_hq)?.id ?? tenantBranches[0]?.id ?? ''
   );
+
+  useEffect(() => {
+    setTargetTenantId(activeTenant.id);
+    const list = branches.filter((b) => b.tenant_id === activeTenant.id);
+    setTargetBranchId(list.find((b) => b.is_hq)?.id ?? list[0]?.id ?? '');
+  }, [activeTenant.id, allowGlobalView, branches]);
 
   const [sourceLabel, setSourceLabel] = useState<string>('');
   const [rawRecords, setRawRecords] = useState<LegacyMdbRecord[]>([]);
   const [detectedTables, setDetectedTables] = useState<string[]>([]);
   const [binarySample, setBinarySample] = useState<string[]>([]);
+  const [isBinaryScan, setIsBinaryScan] = useState(false);
+  const [importSourceType, setImportSourceType] = useState<
+    'csv' | 'json' | 'mdb_scan' | 'simulation' | null
+  >(null);
   const [uploadedPhotos, setUploadedPhotos] = useState<LegacyPhotoUpload[]>([]);
 
   const [migrating, setMigrating] = useState(false);
@@ -91,6 +115,8 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
       setRawRecords(parsed);
       setDetectedTables(['CSV Export']);
       setBinarySample([]);
+      setIsBinaryScan(false);
+      setImportSourceType('csv');
       setStep(2);
     } else if (ext.endsWith('.json')) {
       const text = await file.text();
@@ -99,9 +125,12 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
         setRawRecords(Array.isArray(json) ? json : []);
         setDetectedTables(['JSON Export']);
         setBinarySample([]);
+        setIsBinaryScan(false);
+        setImportSourceType('json');
         setStep(2);
       } catch {
         setRawRecords([]);
+        setImportSourceType('json');
       }
     } else {
       // Binary .mdb scan
@@ -110,36 +139,52 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
       setDetectedTables(scan.detectedTables);
       setBinarySample(scan.extractedStringsSample);
       setRawRecords(scan.records);
+      setIsBinaryScan(true);
+      setImportSourceType('mdb_scan');
       setStep(2);
     }
   };
 
   const handleLoadSimulation = () => {
     setMigrationReport(null);
-    setSourceLabel('CPRepair.mdb (Dataset Simulación Legacy)');
+    setSourceLabel('TallerLegacy.mdb (Dataset Simulación Legacy)');
     setDetectedTables(['Reparaciones', 'Clientes', 'Agenda']);
     setBinarySample(['Standard Jet DB', 'Reparaciones', 'Clientes', 'IdOrden', 'Sintomas']);
     setRawRecords(SIMULATED_MDB_RECORDS);
+    setIsBinaryScan(true);
+    setImportSourceType('simulation');
     setStep(2);
   };
 
-  const handleLegacyPhotosUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleLegacyPhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files?.length) return;
 
-    Array.from(files).forEach((file) => {
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
+    const list = Array.from(files);
+    e.target.value = '';
+    for (const file of list) {
+      try {
+        const compressed = await compressImageToWebP(file, 1280, 0.8);
+        setUploadedPhotos((prev) => [
+          ...prev,
+          { name: file.name, dataUrl: compressed.dataUrl },
+        ]);
+      } catch {
+        const fallbackUrl = await new Promise<string | null>((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () =>
+            resolve(typeof reader.result === 'string' ? reader.result : null);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(file);
+        });
+        if (fallbackUrl) {
           setUploadedPhotos((prev) => [
             ...prev,
-            { name: file.name, dataUrl: reader.result as string },
+            { name: file.name, dataUrl: fallbackUrl },
           ]);
         }
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = '';
+      }
+    }
   };
 
   const handleExecuteMigration = async () => {
@@ -147,41 +192,76 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
     setMigrating(true);
     setProgress(25);
 
+    const safeTenantId = allowGlobalView ? targetTenantId : activeTenant.id;
+    const validBranches = branches.filter((b) => b.tenant_id === safeTenantId);
     const branchToUse =
-      targetBranchId ||
-      tenantBranches.find((b) => b.is_hq)?.id ||
-      tenantBranches[0]?.id ||
+      (validBranches.some((b) => b.id === targetBranchId) ? targetBranchId : '') ||
+      validBranches.find((b) => b.is_hq)?.id ||
+      validBranches[0]?.id ||
       '';
 
     const result = executeLegacyMigration(erpState, previewRows, {
-      tenantId: targetTenantId,
+      tenantId: safeTenantId,
       branchId: branchToUse,
     });
+    const targetTenantObj =
+      erpState.tenants.find((t) => t.id === safeTenantId) ?? activeTenant;
 
-    setProgress(65);
+    setProgress(55);
 
     let supabaseStatus = 'Modo Demo Local (guardado en navegador)';
-    if (supabaseConfig.connected && supabaseConfig.url && supabaseConfig.anonKey) {
-      const importedOrderIds = new Set(
-        result.nextState.workOrders
-          .slice(0, result.importedOrders)
-          .map((o) => o.id)
-      );
-      const newOrders = result.nextState.workOrders.filter((o) =>
-        importedOrderIds.has(o.id)
-      );
+    if (isSupabaseLive(supabaseConfig)) {
+      const storageErrors: string[] = [];
+      for (const order of result.createdOrdersList) {
+        for (const photo of order.photos) {
+          if (photo.url.startsWith('data:image/')) {
+            try {
+              const blob = await (await fetch(photo.url)).blob();
+              const upPhoto = await uploadOrderPhotoToStorage(supabaseConfig, {
+                tenantId: safeTenantId,
+                workOrderId: order.id,
+                blob,
+                stage: photo.stage,
+                caption: photo.caption,
+              });
+              if (upPhoto.ok && upPhoto.publicUrl) {
+                photo.url = upPhoto.publicUrl;
+              } else if (upPhoto.error) {
+                storageErrors.push(upPhoto.error);
+              }
+            } catch {
+              storageErrors.push('No se pudo convertir imagen legacy para Storage');
+            }
+          }
+        }
+      }
+
+      setProgress(75);
+
+      const workOrdersForSupabase = result.createdOrdersList.map((o) => ({
+        ...o,
+        photos: o.photos.filter((ph) => !ph.url.startsWith('data:image/')),
+      }));
+
       const up = await upsertMigratedDataToSupabase(
         supabaseConfig.url,
         supabaseConfig.anonKey,
         {
-          clients: result.nextState.clients.slice(0, result.createdClients),
-          assets: result.nextState.assets.slice(0, result.importedOrders),
-          workOrders: newOrders,
+          clients: result.createdClientsList,
+          assets: result.createdAssetsList,
+          workOrders: workOrdersForSupabase,
+          catalogItems: erpState.catalogItems,
+          ivaRate: targetTenantObj.iva_rate,
         }
       );
-      supabaseStatus = up.ok
-        ? 'Sincronizado vía UPSERT (legacy_mdb_id) en Supabase'
-        : `Guardado local · Supabase aviso: ${up.error}`;
+      if (up.ok) {
+        supabaseStatus =
+          storageErrors.length > 0
+            ? `Sincronizado en Supabase (algunas fotos locales no subieron a Storage: ${storageErrors[0]})`
+            : 'Sincronizado vía UPSERT (legacy_mdb_id) y Storage en Supabase';
+      } else {
+        supabaseStatus = `Guardado local · Supabase aviso: ${up.error}`;
+      }
     }
 
     setProgress(100);
@@ -201,10 +281,10 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl sm:text-[28px] font-semibold tracking-tight text-slate-900">
-            Migrador Legacy CP Reparaciones (.mdb / .csv / /Imagenes/)
+            Migrador Legacy FIXICLOUD (.mdb / .csv / /Imagenes/)
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Asistente en 3 pasos para importar historial de clientes, equipos, órdenes y fotos desde MS Access CPRepair.mdb hacia FIXICLOUD.
+            Asistente en 3 pasos para importar historial de clientes, equipos, órdenes y fotos desde MS Access (.mdb) hacia FIXICLOUD.
           </p>
         </div>
       </div>
@@ -242,10 +322,11 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
               </label>
               <select
                 value={targetTenantId}
+                disabled={!allowGlobalView}
                 onChange={(e) => handleTenantChange(e.target.value)}
-                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-75 disabled:cursor-not-allowed"
               >
-                {erpState.tenants.map((t) => (
+                {visibleTenants.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
@@ -281,7 +362,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
           >
             <UploadCloud className="h-10 w-10 text-[#3E92CC] mx-auto" />
             <div className="text-sm font-semibold text-slate-900">
-              Arrastra tu archivo CPRepair.mdb, .csv o .json aquí
+              Arrastra tu archivo .mdb, .csv o .json aquí
             </div>
             <p className="text-xs text-slate-500 max-w-lg mx-auto">
               Acepta bases Microsoft Access (.mdb) con escáner de tablas en navegador o exportaciones CSV/JSON de las tablas Reparaciones, Clientes y Agenda.
@@ -307,7 +388,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                 className="inline-flex items-center gap-2 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2.5 text-xs font-semibold transition-colors"
               >
                 <Database className="h-4 w-4" />
-                <span>Cargar Dataset de Simulación CPRepair.mdb Legacy</span>
+                <span>Cargar Dataset de Simulación Legacy (.mdb)</span>
               </button>
             </div>
           </div>
@@ -339,6 +420,23 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
               Continuar a Paso 3: /Imagenes/ y Migración
             </button>
           </div>
+
+          {(importSourceType === 'simulation' ||
+            (importSourceType === 'mdb_scan' && isBinaryScan)) && (
+            <AlertBanner
+              variant="warning"
+              title={
+                importSourceType === 'simulation'
+                  ? 'Dataset de Simulación Legacy Activo'
+                  : 'Escáner binario .mdb en navegador (vista previa / respaldo)'
+              }
+              message={
+                importSourceType === 'simulation'
+                  ? 'Estás previsualizando registros simulados de demostración. Para migrar datos reales de producción desde MS Access, exporta tus tablas a .csv o .json e impórtalas en el Paso 1.'
+                  : 'El escáner en navegador inspecciona cabeceras Jet y cadenas .mdb y usa registros de respaldo si Access está cifrado o comprimido. Para migrar el 100% de registros reales desde MS Access, exporta las tablas a .csv o .json.'
+              }
+            />
+          )}
 
           {binarySample.length > 0 && (
             <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC]/70 p-3 text-[11px] font-mono text-slate-600">
@@ -434,7 +532,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                 Emparejamiento de Carpeta /Imagenes/ y Ejecución Final
               </h2>
               <p className="text-xs text-slate-500">
-                Sube imágenes cuyos nombres incluyan el ID antiguo (ej. CP-4013_fusor.jpg) para asociarlas automáticamente a la orden migrada.
+                Sube imágenes cuyos nombres incluyan el ID antiguo (ej. FX-4013_fusor.jpg) para asociarlas automáticamente a la orden migrada.
               </p>
             </div>
 

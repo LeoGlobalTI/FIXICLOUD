@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Calendar,
   CheckCircle2,
@@ -11,21 +11,31 @@ import {
   X,
 } from 'lucide-react';
 import type {
+  AppUser,
   Appointment,
   AppointmentStatus,
   Branch,
   Client,
+  RoleType,
   ServiceModality,
   Tenant,
   WorkOrder,
 } from '../types/erp';
-import { buildWhatsAppUrl } from '../utils/erpLogic';
+import {
+  buildWhatsAppUrl,
+  getDefaultTenantTechnicianName,
+  getRolePermissions,
+} from '../utils/erpLogic';
 import { generateUUID } from '../utils/uuid';
+import { AlertBanner } from './ui/AlertBanner';
 
 interface AppointmentsViewProps {
   tenant: Tenant;
   branches: Branch[];
+  appUsers: AppUser[];
   activeBranchId: string;
+  lockedBranchId?: string | null;
+  activeRole: RoleType;
   clients: Client[];
   orders: WorkOrder[];
   appointments: Appointment[];
@@ -44,7 +54,10 @@ const STATUS_LABEL: Record<AppointmentStatus, { label: string; color: string }> 
 export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
   tenant,
   branches,
+  appUsers,
   activeBranchId,
+  lockedBranchId,
+  activeRole,
   clients,
   orders,
   appointments,
@@ -57,12 +70,35 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
   const [techFilter, setTechFilter] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
 
-  const tenantBranches = branches.filter((b) => b.tenant_id === tenant.id);
-  const tenantClients = clients.filter((c) => c.tenant_id === tenant.id);
+  const perms = getRolePermissions(activeRole);
+  const tenantBranches = useMemo(
+    () => branches.filter((b) => b.tenant_id === tenant.id),
+    [branches, tenant.id]
+  );
+  const selectableBranches = useMemo(
+    () =>
+      lockedBranchId
+        ? tenantBranches.filter((b) => b.id === lockedBranchId)
+        : tenantBranches,
+    [lockedBranchId, tenantBranches]
+  );
+  const effectiveBranches =
+    selectableBranches.length > 0 ? selectableBranches : tenantBranches;
+  const tenantClients = useMemo(
+    () => clients.filter((c) => c.tenant_id === tenant.id),
+    [clients, tenant.id]
+  );
   const defaultBranchId =
-    activeBranchId !== 'ALL'
+    lockedBranchId ||
+    (activeBranchId !== 'ALL' && tenantBranches.some((b) => b.id === activeBranchId)
       ? activeBranchId
-      : tenantBranches.find((b) => b.is_hq)?.id ?? tenantBranches[0]?.id ?? '';
+      : effectiveBranches.find((b) => b.is_hq)?.id ?? effectiveBranches[0]?.id ?? '');
+  const defaultTechName = getDefaultTenantTechnicianName(
+    appUsers,
+    tenant.id,
+    defaultBranchId
+  );
+  const todayIso = new Date().toISOString().slice(0, 10);
 
   // Form states
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -71,11 +107,19 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
   const [clientId, setClientId] = useState(tenantClients[0]?.id ?? '');
   const [modality, setModality] = useState<ServiceModality>('home_service');
   const [visitAddress, setVisitAddress] = useState('');
-  const [technician, setTechnician] = useState('Camila Herrera');
-  const [date, setDate] = useState('2026-11-13');
+  const [technician, setTechnician] = useState(defaultTechName);
+  const [date, setDate] = useState(todayIso);
   const [startTime, setStartTime] = useState('10:00');
   const [endTime, setEndTime] = useState('11:30');
   const [notes, setNotes] = useState('');
+  const [aptFormError, setAptFormError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTechFilter('ALL');
+    setBranchId(defaultBranchId);
+    setClientId(tenantClients[0]?.id ?? '');
+    setTechnician(defaultTechName);
+  }, [tenant.id, defaultBranchId, defaultTechName]);
 
   const scopedAppointments = useMemo(() => {
     return appointments
@@ -89,25 +133,38 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
   }, [appointments, tenant.id, activeBranchId, techFilter]);
 
   const technicians = useMemo(() => {
-    const set = new Set(
-      appointments.filter((a) => a.tenant_id === tenant.id).map((a) => a.technician)
-    );
+    const set = new Set<string>();
+    for (const u of appUsers) {
+      if (
+        u.is_active &&
+        u.tenant_id === tenant.id &&
+        (u.role === 'technician' || u.role === 'admin')
+      ) {
+        set.add(u.full_name);
+      }
+    }
+    for (const a of appointments) {
+      if (a.tenant_id === tenant.id && a.technician) {
+        set.add(a.technician);
+      }
+    }
     return Array.from(set);
-  }, [appointments, tenant.id]);
+  }, [appointments, appUsers, tenant.id]);
 
-  const clientMap = new Map(clients.map((c) => [c.id, c]));
-  const branchMap = new Map(branches.map((b) => [b.id, b]));
-  const orderMap = new Map(orders.map((o) => [o.id, o]));
+  const clientMap = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
+  const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
+  const orderMap = useMemo(() => new Map(orders.map((o) => [o.id, o])), [orders]);
 
   const openCreateModal = () => {
+    setAptFormError(null);
     setEditingId(null);
     setSubject('');
     setBranchId(defaultBranchId);
     setClientId(tenantClients[0]?.id ?? '');
     setModality('home_service');
     setVisitAddress(tenantClients[0]?.address ?? '');
-    setTechnician('Diego Torres');
-    setDate('2026-11-13');
+    setTechnician(defaultTechName);
+    setDate(new Date().toISOString().slice(0, 10));
     setStartTime('10:00');
     setEndTime('11:30');
     setNotes('');
@@ -115,9 +172,11 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
   };
 
   const openEditModal = (apt: Appointment) => {
+    if (lockedBranchId && apt.branch_id !== lockedBranchId) return;
+    setAptFormError(null);
     setEditingId(apt.id);
     setSubject(apt.subject);
-    setBranchId(apt.branch_id);
+    setBranchId(lockedBranchId || apt.branch_id);
     setClientId(apt.client_id);
     setModality(apt.modality);
     setVisitAddress(apt.visit_address ?? '');
@@ -131,15 +190,33 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!subject.trim() || !clientId) return;
+    setAptFormError(null);
+    if (!subject.trim()) {
+      setAptFormError('Ingresa el asunto o motivo de la cita.');
+      return;
+    }
+    if (!clientId || !tenantClients.some((c) => c.id === clientId)) {
+      setAptFormError('Selecciona un cliente válido para agendar la cita.');
+      return;
+    }
+    if (!startTime || !endTime || endTime <= startTime) {
+      setAptFormError('La hora de término debe ser posterior a la hora de inicio.');
+      return;
+    }
+    const safeBranchId = lockedBranchId
+      ? lockedBranchId
+      : effectiveBranches.some((b) => b.id === branchId)
+      ? branchId
+      : defaultBranchId;
 
     if (editingId) {
       const existing = appointments.find((a) => a.id === editingId);
       if (!existing) return;
+      if (lockedBranchId && existing.branch_id !== lockedBranchId) return;
       onUpdateAppointment({
         ...existing,
         subject: subject.trim(),
-        branch_id: branchId,
+        branch_id: safeBranchId,
         client_id: clientId,
         modality,
         visit_address: modality === 'home_service' ? visitAddress.trim() : undefined,
@@ -153,7 +230,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
       onAddAppointment({
         id: generateUUID(),
         tenant_id: tenant.id,
-        branch_id: branchId,
+        branch_id: safeBranchId,
         subject: subject.trim(),
         client_id: clientId,
         modality,
@@ -314,7 +391,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                             <Wrench className="h-3 w-3 text-[#3E92CC]" />
                             <span>Abrir {linkedOrder.folio}</span>
                           </button>
-                        ) : (
+                        ) : perms.canCreateOrder ? (
                           <button
                             type="button"
                             onClick={() => onConvertToOrder(apt)}
@@ -323,7 +400,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                             <Plus className="h-3 w-3" />
                             <span>Convertir en OT</span>
                           </button>
-                        )}
+                        ) : null}
                         <button
                           type="button"
                           onClick={() => openEditModal(apt)}
@@ -407,13 +484,15 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                   <select
                     aria-label={`Estado cita ${apt.subject}`}
                     value={apt.status}
-                    onChange={(e) =>
+                    disabled={Boolean(lockedBranchId && apt.branch_id !== lockedBranchId)}
+                    onChange={(e) => {
+                      if (lockedBranchId && apt.branch_id !== lockedBranchId) return;
                       onUpdateAppointment({
                         ...apt,
                         status: e.target.value as AppointmentStatus,
-                      })
-                    }
-                    className={`rounded-xl border px-2.5 py-1.5 text-xs font-semibold focus:outline-none ${st.color}`}
+                      });
+                    }}
+                    className={`rounded-xl border px-2.5 py-1.5 text-xs font-semibold focus:outline-none disabled:opacity-60 ${st.color}`}
                   >
                     <option value="scheduled">Programada</option>
                     <option value="completed">Completada</option>
@@ -429,7 +508,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                       <CheckCircle2 className="h-3.5 w-3.5 text-[#3E92CC]" />
                       <span>Ver {linkedOrder.folio}</span>
                     </button>
-                  ) : (
+                  ) : perms.canCreateOrder ? (
                     <button
                       type="button"
                       onClick={() => onConvertToOrder(apt)}
@@ -438,7 +517,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                       <Wrench className="h-3.5 w-3.5" />
                       <span>Convertir Cita en OT</span>
                     </button>
-                  )}
+                  ) : null}
 
                   {tenant.whatsapp_enabled && client?.phone ? (
                     <a
@@ -500,6 +579,13 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
             </div>
 
             <form onSubmit={handleSubmit} className="space-y-3">
+              {aptFormError && (
+                <AlertBanner
+                  variant="error"
+                  message={aptFormError}
+                  onDismiss={() => setAptFormError(null)}
+                />
+              )}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Asunto / Motivo de la Cita *
@@ -543,10 +629,11 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                   </label>
                   <select
                     value={branchId}
+                    disabled={Boolean(lockedBranchId)}
                     onChange={(e) => setBranchId(e.target.value)}
-                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
+                    className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-75"
                   >
-                    {tenantBranches.map((b) => (
+                    {effectiveBranches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}
                       </option>
@@ -576,10 +663,16 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                   </label>
                   <input
                     type="text"
+                    list="apt-tech-list"
                     value={technician}
                     onChange={(e) => setTechnician(e.target.value)}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
+                  <datalist id="apt-tech-list">
+                    {technicians.map((t) => (
+                      <option key={t} value={t} />
+                    ))}
+                  </datalist>
                 </div>
               </div>
 
@@ -619,7 +712,10 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                     type="time"
                     required
                     value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
+                    onChange={(e) => {
+                      setStartTime(e.target.value);
+                      setAptFormError(null);
+                    }}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-2.5 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
@@ -631,7 +727,10 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
                     type="time"
                     required
                     value={endTime}
-                    onChange={(e) => setEndTime(e.target.value)}
+                    onChange={(e) => {
+                      setEndTime(e.target.value);
+                      setAptFormError(null);
+                    }}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-2.5 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>

@@ -11,13 +11,21 @@ import {
 } from 'lucide-react';
 import type { ErpState, SupabaseConfig } from '../types/erp';
 import {
+  ANDESFLEET_TENANT_ID,
   SUPABASE_SCHEMA_SQL,
   type SupabaseTestResult,
   pullSupabaseErpState,
+  seedAndesFleetToSupabase,
   seedDemoDataToSupabase,
+  seedMissingSeedTenantsToSupabase,
   testSupabaseConnection,
 } from '../services/supabaseService';
-import { clearLegacyNonUuidStorage } from '../services/storageService';
+import {
+  clearLegacyNonUuidStorage,
+  getSyncedSeedTenantsForUrl,
+  markSeedTenantsSyncedForUrl,
+} from '../services/storageService';
+import { SEED_ERP_STATE } from '../data/seedData';
 import { AlertBanner } from './ui/AlertBanner';
 
 interface SupabaseModalProps {
@@ -69,15 +77,59 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     setSyncMessage(null);
     clearLegacyNonUuidStorage();
     const res = await pullSupabaseErpState(url, anonKey);
-    setSyncing(false);
     if (res.ok && res.data) {
+      const existingIds = (res.data.tenants ?? []).map((t) => t.id);
+      const alreadySynced = getSyncedSeedTenantsForUrl(url);
+      const seedRes = await seedMissingSeedTenantsToSupabase(
+        url,
+        anonKey,
+        existingIds,
+        { skipIds: alreadySynced }
+      );
+      if (seedRes.ok && seedRes.addedTenantIds.length > 0) {
+        markSeedTenantsSyncedForUrl(url, seedRes.addedTenantIds);
+        const refreshed = await pullSupabaseErpState(url, anonKey);
+        setSyncing(false);
+        if (refreshed.ok && refreshed.data) {
+          onSyncFromSupabase(refreshed.data);
+          setSyncVariant('success');
+          setSyncMessage(
+            `Sincronizado en vivo con Supabase (se cargó AndesFleet Rent a Car SpA y su flota).`
+          );
+          return;
+        }
+      }
+      setSyncing(false);
       onSyncFromSupabase(res.data);
       setSyncVariant('success');
       setSyncMessage('Datos sincronizados en vivo desde Supabase al estado activo.');
     } else {
+      setSyncing(false);
       setSyncVariant('error');
       setSyncMessage(res.error ?? 'No se pudo sincronizar.');
     }
+  };
+
+  const handleSeedAndesFleet = async () => {
+    setSeeding(true);
+    setSyncMessage(null);
+    clearLegacyNonUuidStorage();
+    const res = await seedAndesFleetToSupabase(url, anonKey);
+    if (res.ok) {
+      markSeedTenantsSyncedForUrl(url, [ANDESFLEET_TENANT_ID]);
+      const pullRes = await pullSupabaseErpState(url, anonKey);
+      if (pullRes.ok && pullRes.data) {
+        onSyncFromSupabase(pullRes.data);
+      }
+      setSyncVariant('success');
+      setSyncMessage(
+        `AndesFleet Rent a Car SpA y su flota de ejemplo cargados en Supabase. ${res.message}`
+      );
+    } else {
+      setSyncVariant('error');
+      setSyncMessage(res.message);
+    }
+    setSeeding(false);
   };
 
   const handleSeedDb = async () => {
@@ -89,6 +141,10 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
     }
     const res = await seedDemoDataToSupabase(url, anonKey);
     if (res.ok) {
+      markSeedTenantsSyncedForUrl(
+        url,
+        SEED_ERP_STATE.tenants.map((t) => t.id)
+      );
       const pullRes = await pullSupabaseErpState(url, anonKey);
       if (pullRes.ok && pullRes.data) {
         onSyncFromSupabase(pullRes.data);
@@ -209,17 +265,31 @@ export const SupabaseModal: React.FC<SupabaseModalProps> = ({
                   <button
                     type="button"
                     onClick={handlePull}
-                    disabled={syncing}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
+                    disabled={syncing || seeding}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors"
                   >
                     <span>{syncing ? 'Sincronizando...' : 'Sincronizar Tablas'}</span>
                   </button>
 
                   <button
                     type="button"
+                    onClick={handleSeedAndesFleet}
+                    disabled={seeding || syncing}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1A4B7C] hover:bg-[#0A2463] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors"
+                  >
+                    <CloudUpload className="h-3.5 w-3.5 text-[#3E92CC]" />
+                    <span>
+                      {seeding
+                        ? 'Cargando en Supabase...'
+                        : 'Cargar Flota AndesFleet en Supabase'}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={handleSeedDb}
-                    disabled={seeding}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
+                    disabled={seeding || syncing}
+                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors"
                   >
                     <CloudUpload className="h-3.5 w-3.5 text-[#3E92CC]" />
                     <span>

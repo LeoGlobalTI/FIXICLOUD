@@ -488,7 +488,11 @@ export const PrintCenterModal: React.FC<PrintCenterModalProps> = ({
                   </div>
                   <div>
                     <strong>{t.loanCommercialValue}:</strong>{' '}
-                    <span className="font-mono">$350.000 CLP</span>
+                    <span className="font-mono">
+                      {lang === 'en'
+                        ? 'Per current inventory & handover record'
+                        : 'Según valor declarado en acta de entrega'}
+                    </span>
                   </div>
                   <p className="pt-1 text-[11px] text-slate-700">{t.loanCommitment}</p>
                 </div>
@@ -735,7 +739,7 @@ export const PrintCenterModal: React.FC<PrintCenterModalProps> = ({
                 Centro de Impresión FIXICLOUD — {order.folio}
               </h2>
               <p className="text-xs text-slate-300">
-                9 reportes compatibles con CP Reparaciones · QR dinámico · Doble Media Hoja · ES/EN
+                9 reportes oficiales de FIXICLOUD · QR dinámico · Doble Media Hoja · ES/EN
               </p>
             </div>
           </div>

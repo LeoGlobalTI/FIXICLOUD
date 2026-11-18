@@ -3,39 +3,73 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { AppointmentsView } from './components/AppointmentsView';
-import { AuthModal } from './components/AuthModal';
-import { ClientsAssetsView } from './components/ClientsAssetsView';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { ContextHeader } from './components/ContextHeader';
 import { DashboardView } from './components/DashboardView';
-import { InventoryLoansView } from './components/InventoryLoansView';
-import { LegacyMigratorView } from './components/LegacyMigratorView';
 import { LoginScreen } from './components/LoginScreen';
-import { NewOrderModal, type NewOrderPrefill } from './components/NewOrderModal';
-import { NewTenantModal } from './components/NewTenantModal';
-import { OrderConsoleView } from './components/OrderConsoleView';
-import { PrintCenterModal } from './components/PrintCenterModal';
-import { PublicTrackPortal } from './components/PublicTrackPortal';
-import { SettingsBranchesView } from './components/SettingsBranchesView';
+import { type NewOrderPrefill } from './components/NewOrderModal';
 import { Sidebar } from './components/Sidebar';
-import { SupabaseModal } from './components/SupabaseModal';
+import { AlertBanner } from './components/ui/AlertBanner';
 import { ConfirmSuccessModal } from './components/ui/ConfirmSuccessModal';
+
+const AppointmentsView = lazy(() =>
+  import('./components/AppointmentsView').then((m) => ({ default: m.AppointmentsView }))
+);
+const AuthModal = lazy(() =>
+  import('./components/AuthModal').then((m) => ({ default: m.AuthModal }))
+);
+const ClientsAssetsView = lazy(() =>
+  import('./components/ClientsAssetsView').then((m) => ({ default: m.ClientsAssetsView }))
+);
+const InventoryLoansView = lazy(() =>
+  import('./components/InventoryLoansView').then((m) => ({ default: m.InventoryLoansView }))
+);
+const LegacyMigratorView = lazy(() =>
+  import('./components/LegacyMigratorView').then((m) => ({ default: m.LegacyMigratorView }))
+);
+const NewOrderModal = lazy(() =>
+  import('./components/NewOrderModal').then((m) => ({ default: m.NewOrderModal }))
+);
+const NewTenantModal = lazy(() =>
+  import('./components/NewTenantModal').then((m) => ({ default: m.NewTenantModal }))
+);
+const OrderConsoleView = lazy(() =>
+  import('./components/OrderConsoleView').then((m) => ({ default: m.OrderConsoleView }))
+);
+const PrintCenterModal = lazy(() =>
+  import('./components/PrintCenterModal').then((m) => ({ default: m.PrintCenterModal }))
+);
+const PublicTrackPortal = lazy(() =>
+  import('./components/PublicTrackPortal').then((m) => ({ default: m.PublicTrackPortal }))
+);
+const SettingsBranchesView = lazy(() =>
+  import('./components/SettingsBranchesView').then((m) => ({
+    default: m.SettingsBranchesView,
+  }))
+);
+const SupabaseModal = lazy(() =>
+  import('./components/SupabaseModal').then((m) => ({ default: m.SupabaseModal }))
+);
 import {
+  getSyncedSeedTenantsForUrl,
   loadAuthSession,
   loadErpState,
   loadSupabaseConfig,
+  markSeedTenantsSyncedForUrl,
   resetErpState,
   saveAuthSession,
   saveErpState,
   saveSupabaseConfig,
 } from './services/storageService';
 import {
+  deleteAppUserFromSupabase,
   deleteBranchFromSupabase,
   deleteOrderItemFromSupabase,
+  deleteOrderPaymentFromSupabase,
   deleteOrderPhotoFromSupabase,
   isSupabaseLive,
   pullSupabaseErpState,
+  seedMissingSeedTenantsToSupabase,
   syncAppUserToSupabase,
   syncAppointmentToSupabase,
   syncAssetToSupabase,
@@ -63,7 +97,13 @@ import type {
   Tenant,
   WorkOrder,
 } from './types/erp';
-import { getRolePermissions } from './utils/erpLogic';
+import {
+  canDeleteBranchSafely,
+  canViewGlobalScope,
+  getRolePermissions,
+  getVisibleTenantsForScope,
+  sanitizeOrderUpdateForRole,
+} from './utils/erpLogic';
 import { generateUUID } from './utils/uuid';
 
 function getInitialTrackFromUrl(): { isTrack: boolean; code: string } {
@@ -79,6 +119,15 @@ function getInitialTrackFromUrl(): { isTrack: boolean; code: string } {
 
 export default function App() {
   const [erpState, setErpState] = useState<ErpState>(() => loadErpState());
+  const erpStateRef = useRef<ErpState>(erpState);
+  erpStateRef.current = erpState;
+
+  const commitErpState = (updater: (prev: ErpState) => ErpState): ErpState => {
+    const next = updater(erpStateRef.current);
+    erpStateRef.current = next;
+    setErpState(next);
+    return next;
+  };
   const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfig>(() =>
     loadSupabaseConfig()
   );
@@ -123,10 +172,19 @@ export default function App() {
   const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
+  const trackSync = (promise: Promise<{ ok: boolean; error?: string }>) => {
+    void promise.then((res) => {
+      if (!res.ok && res.error) {
+        setSyncError(res.error);
+      }
+    });
+  };
 
   useEffect(() => {
-    saveErpState(erpState);
-  }, [erpState]);
+    saveErpState(erpState, { stripCredentials: isSupabaseLive(supabaseConfig) });
+  }, [erpState, supabaseConfig]);
 
   useEffect(() => {
     saveSupabaseConfig(supabaseConfig);
@@ -137,13 +195,42 @@ export default function App() {
   }, [authSession]);
 
   // Auto-pull initial data from Supabase when .env or stored live credentials exist
+  // and automatically upload newly added seed tenants (e.g. AndesFleet) if missing in Supabase
   useEffect(() => {
     if (!isSupabaseLive(supabaseConfig)) return;
     let cancelled = false;
-    pullSupabaseErpState(supabaseConfig.url, supabaseConfig.anonKey).then((res) => {
+    (async () => {
+      const res = await pullSupabaseErpState(
+        supabaseConfig.url,
+        supabaseConfig.anonKey
+      );
       if (cancelled || !res.ok || !res.data) return;
-      handleSyncFromSupabase(res.data);
-    });
+
+      const existingIds = (res.data.tenants ?? []).map((t) => t.id);
+      const alreadySynced = getSyncedSeedTenantsForUrl(supabaseConfig.url);
+      const seedRes = await seedMissingSeedTenantsToSupabase(
+        supabaseConfig.url,
+        supabaseConfig.anonKey,
+        existingIds,
+        { skipIds: alreadySynced }
+      );
+
+      if (!cancelled && seedRes.ok && seedRes.addedTenantIds.length > 0) {
+        markSeedTenantsSyncedForUrl(supabaseConfig.url, seedRes.addedTenantIds);
+        const refreshed = await pullSupabaseErpState(
+          supabaseConfig.url,
+          supabaseConfig.anonKey
+        );
+        if (!cancelled && refreshed.ok && refreshed.data) {
+          handleSyncFromSupabase(refreshed.data);
+          return;
+        }
+      }
+
+      if (!cancelled) {
+        handleSyncFromSupabase(res.data);
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -176,11 +263,18 @@ export default function App() {
     }
   }, [activeRole, activeSection]);
 
+  const allowGlobalScope = canViewGlobalScope(activeRole, authSession?.role);
+
+  const effectiveTenantId =
+    authSession && authSession.role !== 'superadmin' && authSession.tenant_id
+      ? authSession.tenant_id
+      : activeTenantId;
+
   const activeTenant = useMemo(
     () =>
-      erpState.tenants.find((t) => t.id === activeTenantId) ??
+      erpState.tenants.find((t) => t.id === effectiveTenantId) ??
       erpState.tenants[0],
-    [erpState.tenants, activeTenantId]
+    [erpState.tenants, effectiveTenantId]
   );
 
   const openOrdersCount = useMemo(
@@ -246,6 +340,7 @@ export default function App() {
   };
 
   const handleSelectTenant = (tenantId: string) => {
+    if (!canViewGlobalScope(activeRole, authSession?.role)) return;
     setActiveTenantId(tenantId);
     setActiveBranchId('ALL');
     const firstOrder = erpState.workOrders.find((o) => o.tenant_id === tenantId);
@@ -258,8 +353,10 @@ export default function App() {
     sector: IndustrySector;
     city: string;
   }) => {
+    if (!canViewGlobalScope(activeRole, authSession?.role)) return;
     const tenantId = generateUUID();
     const branchId = generateUUID();
+    const prefix = input.name.slice(0, 3).toLowerCase().replace(/[^a-z]/g, '') || 'emp';
     const newTenant: Tenant = {
       id: tenantId,
       name: input.name,
@@ -292,47 +389,125 @@ export default function App() {
       phone: '',
       business_hours: 'Lun-Vie 09:00 - 18:30',
     };
+
+    const defaultAdmin: AppUser = {
+      id: generateUUID(),
+      tenant_id: tenantId,
+      branch_id: null,
+      username: `admin_${prefix}`,
+      pin_or_password: '123456',
+      full_name: `Administrador ${input.name}`,
+      role: 'admin',
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+    const defaultTech: AppUser = {
+      id: generateUUID(),
+      tenant_id: tenantId,
+      branch_id: branchId,
+      username: `tec_${prefix}`,
+      pin_or_password: '1234',
+      full_name: `Técnico ${input.name}`,
+      role: 'technician',
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+    const defaultRecep: AppUser = {
+      id: generateUUID(),
+      tenant_id: tenantId,
+      branch_id: branchId,
+      username: `recep_${prefix}`,
+      pin_or_password: '1234',
+      full_name: `Recepción ${input.name}`,
+      role: 'receptionist',
+      is_active: true,
+      created_at: new Date().toISOString(),
+    };
+
     setErpState((prev) => ({
       ...prev,
       tenants: [...prev.tenants, newTenant],
       branches: [...prev.branches, hqBranch],
+      appUsers: [defaultAdmin, defaultTech, defaultRecep, ...prev.appUsers],
     }));
-    void syncTenantToSupabase(supabaseConfig, newTenant);
-    void syncBranchToSupabase(supabaseConfig, hqBranch);
+    trackSync(syncTenantToSupabase(supabaseConfig, newTenant));
+    trackSync(syncBranchToSupabase(supabaseConfig, hqBranch));
+    trackSync(syncAppUserToSupabase(supabaseConfig, defaultAdmin, { isNew: true }));
+    trackSync(syncAppUserToSupabase(supabaseConfig, defaultTech, { isNew: true }));
+    trackSync(syncAppUserToSupabase(supabaseConfig, defaultRecep, { isNew: true }));
+
     setActiveTenantId(tenantId);
     setActiveBranchId('ALL');
     setSelectedOrderId(null);
   };
 
   const handleUpdateTenant = (updated: Tenant) => {
+    const perms = getRolePermissions(activeRole);
+    if (!perms.canEditSettings && activeRole !== 'superadmin') return;
+    if (!allowGlobalScope && updated.id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       tenants: prev.tenants.map((t) => (t.id === updated.id ? updated : t)),
     }));
-    void syncTenantToSupabase(supabaseConfig, updated);
+    trackSync(syncTenantToSupabase(supabaseConfig, updated));
   };
 
   const handleAddBranch = (branch: Branch) => {
+    const perms = getRolePermissions(activeRole);
+    if (!perms.canEditSettings && activeRole !== 'superadmin') return;
+    if (!allowGlobalScope && branch.tenant_id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       branches: [...prev.branches, branch],
     }));
-    void syncBranchToSupabase(supabaseConfig, branch);
+    trackSync(syncBranchToSupabase(supabaseConfig, branch));
   };
 
-  const handleDeleteBranch = (branchId: string) => {
+  const handleDeleteBranch = async (
+    branchId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!getRolePermissions(activeRole).canDeleteBranch) {
+      return { ok: false, error: 'Sin permisos para eliminar sucursales.' };
+    }
+    const targetBranch = erpState.branches.find((b) => b.id === branchId);
+    if (!targetBranch) {
+      return { ok: false, error: 'Sucursal no encontrada.' };
+    }
+    if (!allowGlobalScope && targetBranch.tenant_id !== activeTenant.id) {
+      return { ok: false, error: 'No puedes eliminar sucursales de otra empresa.' };
+    }
+    const check = canDeleteBranchSafely(branchId, erpState);
+    if (!check.ok) {
+      return { ok: false, error: check.error };
+    }
+    const res = await deleteBranchFromSupabase(supabaseConfig, branchId);
+    if (!res.ok) {
+      return res;
+    }
     setErpState((prev) => ({
       ...prev,
       branches: prev.branches.filter((b) => b.id !== branchId),
     }));
     if (activeBranchId === branchId) setActiveBranchId('ALL');
-    void deleteBranchFromSupabase(supabaseConfig, branchId);
+    return { ok: true };
   };
 
   const handleAddAppUser = async (
     user: AppUser
   ): Promise<{ ok: boolean; error?: string }> => {
-    const res = await syncAppUserToSupabase(supabaseConfig, user);
+    if (!getRolePermissions(activeRole).canManageUsers) {
+      return { ok: false, error: 'Sin permisos para gestionar usuarios.' };
+    }
+    if (
+      !allowGlobalScope &&
+      (user.role === 'superadmin' || user.tenant_id !== activeTenant.id)
+    ) {
+      return {
+        ok: false,
+        error: 'Solo SuperAdmin Global puede crear cuentas globales o de otras empresas.',
+      };
+    }
+    const res = await syncAppUserToSupabase(supabaseConfig, user, { isNew: true });
     if (!res.ok) return res;
     setErpState((prev) => ({
       ...prev,
@@ -344,22 +519,106 @@ export default function App() {
   const handleUpdateAppUser = async (
     updated: AppUser
   ): Promise<{ ok: boolean; error?: string }> => {
-    const res = await syncAppUserToSupabase(supabaseConfig, updated);
+    if (!getRolePermissions(activeRole).canManageUsers) {
+      return { ok: false, error: 'Sin permisos para gestionar usuarios.' };
+    }
+    const existing = erpState.appUsers.find((u) => u.id === updated.id);
+    if (
+      !allowGlobalScope &&
+      ((existing &&
+        (existing.role === 'superadmin' || existing.tenant_id !== activeTenant.id)) ||
+        updated.role === 'superadmin' ||
+        updated.tenant_id !== activeTenant.id)
+    ) {
+      return {
+        ok: false,
+        error: 'Solo SuperAdmin Global puede editar cuentas globales o de otras empresas.',
+      };
+    }
+    const hasNewPassword = updated.pin_or_password.trim().length > 0;
+    const res = await syncAppUserToSupabase(supabaseConfig, updated, {
+      isNew: hasNewPassword,
+    });
     if (!res.ok) return res;
     setErpState((prev) => ({
       ...prev,
       appUsers: prev.appUsers.map((u) => (u.id === updated.id ? updated : u)),
     }));
+    setAuthSession((prev) => {
+      if (!prev || prev.id !== updated.id) return prev;
+      const nextTenant = updated.tenant_id
+        ? erpState.tenants.find((t) => t.id === updated.tenant_id) ?? prev.tenant
+        : null;
+      const nextBranch = updated.branch_id
+        ? erpState.branches.find((b) => b.id === updated.branch_id) ?? prev.branch
+        : null;
+      return {
+        ...prev,
+        username: updated.username,
+        full_name: updated.full_name,
+        role: updated.role,
+        tenant_id: updated.tenant_id,
+        branch_id: updated.branch_id,
+        tenant: nextTenant,
+        branch: nextBranch,
+      };
+    });
+    return { ok: true };
+  };
+
+  const handleDeleteAppUser = async (
+    userId: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    if (!getRolePermissions(activeRole).canManageUsers) {
+      return { ok: false, error: 'Sin permisos para gestionar usuarios.' };
+    }
+    if (authSession?.id === userId) {
+      return {
+        ok: false,
+        error: 'No puedes eliminar tu propia cuenta mientras tienes la sesión activa.',
+      };
+    }
+    const targetUser = erpState.appUsers.find((u) => u.id === userId);
+    if (
+      !allowGlobalScope &&
+      targetUser &&
+      (targetUser.role === 'superadmin' || targetUser.tenant_id !== activeTenant.id)
+    ) {
+      return {
+        ok: false,
+        error: 'Solo SuperAdmin Global puede eliminar cuentas globales o de otras empresas.',
+      };
+    }
+    const res = await deleteAppUserFromSupabase(supabaseConfig, userId);
+    if (!res.ok) return res;
+    setErpState((prev) => ({
+      ...prev,
+      appUsers: prev.appUsers.filter((u) => u.id !== userId),
+    }));
     return { ok: true };
   };
 
   const handleUpdateOrder = (updated: WorkOrder) => {
-    setErpState((prev) => ({
+    const current = erpStateRef.current;
+    const existing = current.workOrders.find((o) => o.id === updated.id);
+    if (existing && !allowGlobalScope && existing.tenant_id !== activeTenant.id) return;
+    const safeUpdated: WorkOrder = existing
+      ? sanitizeOrderUpdateForRole(existing, updated, activeRole)
+      : updated;
+
+    const nextState = commitErpState((prev) => ({
       ...prev,
-      workOrders: prev.workOrders.map((o) => (o.id === updated.id ? updated : o)),
+      workOrders: prev.workOrders.map((o) => (o.id === safeUpdated.id ? safeUpdated : o)),
     }));
-    const orderTenant = erpState.tenants.find((t) => t.id === updated.tenant_id);
-    void syncWorkOrderToSupabase(supabaseConfig, updated, orderTenant?.iva_rate ?? 19);
+    const orderTenant = nextState.tenants.find((t) => t.id === safeUpdated.tenant_id);
+    trackSync(
+      syncWorkOrderToSupabase(
+        supabaseConfig,
+        safeUpdated,
+        orderTenant?.iva_rate ?? 19,
+        nextState.catalogItems
+      )
+    );
   };
 
   const handleCreateOrder = (payload: {
@@ -368,7 +627,9 @@ export default function App() {
     order: WorkOrder;
     sourceAppointmentId?: string;
   }) => {
-    setErpState((prev) => ({
+    if (!getRolePermissions(activeRole).canCreateOrder) return;
+    if (!allowGlobalScope && payload.order.tenant_id !== activeTenant.id) return;
+    const nextState = commitErpState((prev) => ({
       ...prev,
       clients: payload.newClient ? [payload.newClient, ...prev.clients] : prev.clients,
       assets: payload.newAsset ? [payload.newAsset, ...prev.assets] : prev.assets,
@@ -381,18 +642,25 @@ export default function App() {
           )
         : prev.appointments,
     }));
-    if (payload.newClient) void syncClientToSupabase(supabaseConfig, payload.newClient);
-    if (payload.newAsset) void syncAssetToSupabase(supabaseConfig, payload.newAsset);
-    const orderTenant = erpState.tenants.find((t) => t.id === payload.order.tenant_id);
-    void syncWorkOrderToSupabase(supabaseConfig, payload.order, orderTenant?.iva_rate ?? 19);
+    if (payload.newClient) {
+      trackSync(syncClientToSupabase(supabaseConfig, payload.newClient));
+    }
+    if (payload.newAsset) {
+      trackSync(syncAssetToSupabase(supabaseConfig, payload.newAsset));
+    }
+    const orderTenant = nextState.tenants.find((t) => t.id === payload.order.tenant_id);
+    trackSync(
+      syncWorkOrderToSupabase(
+        supabaseConfig,
+        payload.order,
+        orderTenant?.iva_rate ?? 19,
+        nextState.catalogItems
+      )
+    );
     if (payload.sourceAppointmentId) {
-      const src = erpState.appointments.find((a) => a.id === payload.sourceAppointmentId);
+      const src = nextState.appointments.find((a) => a.id === payload.sourceAppointmentId);
       if (src) {
-        void syncAppointmentToSupabase(supabaseConfig, {
-          ...src,
-          work_order_id: payload.order.id,
-          status: 'completed',
-        });
+        trackSync(syncAppointmentToSupabase(supabaseConfig, src));
       }
     }
     setSelectedOrderId(payload.order.id);
@@ -406,22 +674,26 @@ export default function App() {
   };
 
   const handleAddAppointment = (apt: Appointment) => {
+    if (!allowGlobalScope && apt.tenant_id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       appointments: [apt, ...prev.appointments],
     }));
-    void syncAppointmentToSupabase(supabaseConfig, apt);
+    trackSync(syncAppointmentToSupabase(supabaseConfig, apt));
   };
 
   const handleUpdateAppointment = (updated: Appointment) => {
+    if (!allowGlobalScope && updated.tenant_id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       appointments: prev.appointments.map((a) => (a.id === updated.id ? updated : a)),
     }));
-    void syncAppointmentToSupabase(supabaseConfig, updated);
+    trackSync(syncAppointmentToSupabase(supabaseConfig, updated));
   };
 
   const handleConvertAppointmentToOrder = (apt: Appointment) => {
+    if (!getRolePermissions(activeRole).canCreateOrder) return;
+    if (!allowGlobalScope && apt.tenant_id !== activeTenant.id) return;
     setOrderPrefill({
       clientId: apt.client_id,
       branchId: apt.branch_id,
@@ -436,70 +708,85 @@ export default function App() {
   };
 
   const handleUpdateClient = (updated: Client) => {
+    if (!getRolePermissions(activeRole).canManageClients) return;
+    if (!allowGlobalScope && updated.tenant_id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       clients: prev.clients.map((c) => (c.id === updated.id ? updated : c)),
     }));
-    void syncClientToSupabase(supabaseConfig, updated);
+    trackSync(syncClientToSupabase(supabaseConfig, updated));
   };
 
   const handleAddClient = (client: Client) => {
+    if (!getRolePermissions(activeRole).canManageClients) return;
+    if (!allowGlobalScope && client.tenant_id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       clients: [client, ...prev.clients],
     }));
-    void syncClientToSupabase(supabaseConfig, client);
+    trackSync(syncClientToSupabase(supabaseConfig, client));
   };
 
   const handleUpdateAsset = (updated: CustomerAsset) => {
+    if (!getRolePermissions(activeRole).canManageClients) return;
+    if (!allowGlobalScope && updated.tenant_id !== activeTenant.id) return;
     setErpState((prev) => ({
       ...prev,
       assets: prev.assets.map((a) => (a.id === updated.id ? updated : a)),
     }));
-    void syncAssetToSupabase(supabaseConfig, updated);
+    trackSync(syncAssetToSupabase(supabaseConfig, updated));
   };
 
   const handleAdjustCatalogStock = (catalogItemId: string, delta: number) => {
-    const target = erpState.catalogItems.find((i) => i.id === catalogItemId);
-    if (target) {
-      const next = { ...target, stock_qty: Math.max(0, target.stock_qty + delta) };
-      void syncCatalogItemToSupabase(supabaseConfig, next);
-    }
-    setErpState((prev) => ({
+    const perms = getRolePermissions(activeRole);
+    // Allows direct stock management (admin/superadmin) or stock deduction triggered by order item edits
+    if (!perms.canManageStock && !perms.canEditFinancials) return;
+    const current = erpStateRef.current;
+    const target = current.catalogItems.find((i) => i.id === catalogItemId);
+    if (!target) return;
+    if (!allowGlobalScope && target.tenant_id !== activeTenant.id) return;
+    const next = { ...target, stock_qty: Math.max(0, target.stock_qty + delta) };
+    commitErpState((prev) => ({
       ...prev,
       catalogItems: prev.catalogItems.map((item) =>
-        item.id === catalogItemId
-          ? { ...item, stock_qty: Math.max(0, item.stock_qty + delta) }
-          : item
+        item.id === catalogItemId ? next : item
       ),
     }));
+    trackSync(syncCatalogItemToSupabase(supabaseConfig, next));
   };
 
   const handleAddCatalogItem = (item: CatalogItem) => {
-    setErpState((prev) => ({
+    const perms = getRolePermissions(activeRole);
+    if (!perms.canManageStock || !perms.canManageCatalogPrices) return;
+    if (!allowGlobalScope && item.tenant_id !== activeTenant.id) return;
+    commitErpState((prev) => ({
       ...prev,
       catalogItems: [item, ...prev.catalogItems],
     }));
-    void syncCatalogItemToSupabase(supabaseConfig, item);
+    trackSync(syncCatalogItemToSupabase(supabaseConfig, item));
   };
 
   const handleAddLoanAsset = (loan: LoanAsset) => {
-    setErpState((prev) => ({
+    if (!getRolePermissions(activeRole).canManageStock) return;
+    if (!allowGlobalScope && loan.tenant_id !== activeTenant.id) return;
+    commitErpState((prev) => ({
       ...prev,
       loanAssets: [loan, ...prev.loanAssets],
     }));
-    void syncLoanAssetToSupabase(supabaseConfig, loan);
+    trackSync(syncLoanAssetToSupabase(supabaseConfig, loan));
   };
 
   const handleUpdateLoanStatus = (loanId: string, status: LoanAsset['status']) => {
-    const target = erpState.loanAssets.find((l) => l.id === loanId);
-    if (target) {
-      void syncLoanAssetToSupabase(supabaseConfig, { ...target, status });
-    }
-    setErpState((prev) => ({
+    if (!getRolePermissions(activeRole).canManageStock) return;
+    const current = erpStateRef.current;
+    const target = current.loanAssets.find((l) => l.id === loanId);
+    if (!target) return;
+    if (!allowGlobalScope && target.tenant_id !== activeTenant.id) return;
+    commitErpState((prev) => ({
       ...prev,
       loanAssets: prev.loanAssets.map((l) => (l.id === loanId ? { ...l, status } : l)),
     }));
+    trackSync(syncLoanAssetToSupabase(supabaseConfig, { ...target, status }));
   };
 
   const handleAssignLoanAsset = (
@@ -507,8 +794,21 @@ export default function App() {
     loanAssetId: string,
     notes: string
   ) => {
-    const asset = erpState.loanAssets.find((l) => l.id === loanAssetId);
-    if (!asset) return;
+    const perms = getRolePermissions(activeRole);
+    if (!perms.canManageOrderLoans) return;
+    const current = erpStateRef.current;
+    const asset = current.loanAssets.find((l) => l.id === loanAssetId);
+    const targetOrder = current.workOrders.find((o) => o.id === orderId);
+    if (!asset || !targetOrder) return;
+    if (asset.status !== 'available') return;
+    if (asset.branch_id !== targetOrder.branch_id) return;
+    if (targetOrder.loan && !targetOrder.loan.returned_at) return;
+    if (
+      !allowGlobalScope &&
+      (targetOrder.tenant_id !== activeTenant.id || asset.tenant_id !== activeTenant.id)
+    ) {
+      return;
+    }
     const now = new Date().toISOString();
     const newLoan = {
       id: generateUUID(),
@@ -518,86 +818,104 @@ export default function App() {
       loaned_at: now,
       delivery_notes: notes,
     };
-    const targetOrder = erpState.workOrders.find((o) => o.id === orderId);
-    if (targetOrder) {
-      const orderTenant = erpState.tenants.find((t) => t.id === targetOrder.tenant_id);
-      void syncLoanAssetToSupabase(supabaseConfig, { ...asset, status: 'loaned' });
-      void syncWorkOrderToSupabase(
-        supabaseConfig,
-        {
-          ...targetOrder,
-          updated_at: now,
-          loan: newLoan,
-        },
-        orderTenant?.iva_rate ?? 19
-      );
-    }
-    setErpState((prev) => ({
+    const nextOrder: WorkOrder = {
+      ...targetOrder,
+      updated_at: now,
+      loan: newLoan,
+    };
+    const nextState = commitErpState((prev) => ({
       ...prev,
       loanAssets: prev.loanAssets.map((l) =>
         l.id === loanAssetId ? { ...l, status: 'loaned' } : l
       ),
-      workOrders: prev.workOrders.map((o) =>
-        o.id === orderId
-          ? {
-              ...o,
-              updated_at: now,
-              loan: newLoan,
-            }
-          : o
-      ),
+      workOrders: prev.workOrders.map((o) => (o.id === orderId ? nextOrder : o)),
     }));
+    const orderTenant = nextState.tenants.find((t) => t.id === targetOrder.tenant_id);
+    trackSync(syncLoanAssetToSupabase(supabaseConfig, { ...asset, status: 'loaned' }));
+    trackSync(
+      syncWorkOrderToSupabase(
+        supabaseConfig,
+        nextOrder,
+        orderTenant?.iva_rate ?? 19,
+        nextState.catalogItems
+      )
+    );
   };
 
   const handleReturnLoanAsset = (orderId: string) => {
-    const order = erpState.workOrders.find((o) => o.id === orderId);
-    if (!order?.loan) return;
+    const perms = getRolePermissions(activeRole);
+    if (!perms.canManageOrderLoans) return;
+    const current = erpStateRef.current;
+    const order = current.workOrders.find((o) => o.id === orderId);
+    if (!order?.loan || order.loan.returned_at) return;
+    if (!allowGlobalScope && order.tenant_id !== activeTenant.id) return;
     const loanAssetId = order.loan.loan_asset_id;
     const now = new Date().toISOString();
-    const loanAsset = erpState.loanAssets.find((l) => l.id === loanAssetId);
-    if (loanAsset) {
-      void syncLoanAssetToSupabase(supabaseConfig, { ...loanAsset, status: 'available' });
-    }
-    void syncWorkOrderToSupabase(supabaseConfig, {
+    const loanAsset = current.loanAssets.find((l) => l.id === loanAssetId);
+    const nextOrder: WorkOrder = {
       ...order,
       updated_at: now,
       loan: { ...order.loan, returned_at: now },
-    });
-    setErpState((prev) => ({
+    };
+    const nextState = commitErpState((prev) => ({
       ...prev,
       loanAssets: prev.loanAssets.map((l) =>
         l.id === loanAssetId ? { ...l, status: 'available' } : l
       ),
-      workOrders: prev.workOrders.map((o) =>
-        o.id === orderId && o.loan
-          ? {
-              ...o,
-              updated_at: now,
-              loan: { ...o.loan, returned_at: now },
-            }
-          : o
-      ),
+      workOrders: prev.workOrders.map((o) => (o.id === orderId ? nextOrder : o)),
     }));
+    if (loanAsset) {
+      trackSync(
+        syncLoanAssetToSupabase(supabaseConfig, { ...loanAsset, status: 'available' })
+      );
+    }
+    const orderTenant = nextState.tenants.find((t) => t.id === order.tenant_id);
+    trackSync(
+      syncWorkOrderToSupabase(
+        supabaseConfig,
+        nextOrder,
+        orderTenant?.iva_rate ?? 19,
+        nextState.catalogItems
+      )
+    );
   };
 
   const handleSyncFromSupabase = (partial: Partial<ErpState>) => {
     setErpState((prev) => ({
       tenants: partial.tenants?.length ? partial.tenants : prev.tenants,
       branches: partial.branches?.length ? partial.branches : prev.branches,
-      profiles: partial.profiles?.length ? partial.profiles : prev.profiles,
       appUsers: partial.appUsers?.length ? partial.appUsers : prev.appUsers,
-      clients: partial.clients?.length ? partial.clients : prev.clients,
-      assets: partial.assets?.length ? partial.assets : prev.assets,
-      catalogItems: partial.catalogItems?.length
-        ? partial.catalogItems
-        : prev.catalogItems,
-      loanAssets: partial.loanAssets?.length ? partial.loanAssets : prev.loanAssets,
-      workOrders: partial.workOrders?.length ? partial.workOrders : prev.workOrders,
-      appointments: partial.appointments?.length
-        ? partial.appointments
-        : prev.appointments,
+      clients: partial.clients ?? prev.clients,
+      assets: partial.assets ?? prev.assets,
+      catalogItems: partial.catalogItems ?? prev.catalogItems,
+      loanAssets: partial.loanAssets ?? prev.loanAssets,
+      workOrders: partial.workOrders ?? prev.workOrders,
+      appointments: partial.appointments ?? prev.appointments,
     }));
   };
+
+  const lazyFallback = (
+    <div className="p-8 text-center text-xs font-medium text-slate-500">
+      Cargando módulo...
+    </div>
+  );
+
+  if (activeSection === 'track') {
+    return (
+      <Suspense fallback={lazyFallback}>
+        <PublicTrackPortal
+          tenants={erpState.tenants}
+          branches={erpState.branches}
+          clients={erpState.clients}
+          assets={erpState.assets}
+          orders={erpState.workOrders}
+          supabaseConfig={supabaseConfig}
+          initialCode={trackInitialCode}
+          onBackToErp={() => navigateSection(authSession ? 'console' : 'dashboard')}
+        />
+      </Suspense>
+    );
+  }
 
   if (!authSession) {
     return (
@@ -629,38 +947,28 @@ export default function App() {
         />
 
         {showSupabaseModal && (
-          <SupabaseModal
-            config={supabaseConfig}
-            onSaveConfig={setSupabaseConfig}
-            onSyncFromSupabase={handleSyncFromSupabase}
-            onResetDemoData={() => {
-              const fresh = resetErpState();
-              setErpState(fresh);
-              setActiveTenantId(fresh.tenants[0].id);
-              setActiveBranchId('ALL');
-              setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
-            }}
-            onClose={() => setShowSupabaseModal(false)}
-          />
+          <Suspense fallback={null}>
+            <SupabaseModal
+              config={supabaseConfig}
+              onSaveConfig={setSupabaseConfig}
+              onSyncFromSupabase={handleSyncFromSupabase}
+              onResetDemoData={() => {
+                const fresh = resetErpState();
+                setErpState(fresh);
+                setActiveTenantId(fresh.tenants[0].id);
+                setActiveBranchId('ALL');
+                setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
+              }}
+              onClose={() => setShowSupabaseModal(false)}
+            />
+          </Suspense>
         )}
       </>
     );
   }
 
-  if (activeSection === 'track') {
-    return (
-      <PublicTrackPortal
-        tenants={erpState.tenants}
-        branches={erpState.branches}
-        clients={erpState.clients}
-        assets={erpState.assets}
-        orders={erpState.workOrders}
-        supabaseConfig={supabaseConfig}
-        initialCode={trackInitialCode}
-        onBackToErp={() => navigateSection('console')}
-      />
-    );
-  }
+  const lockedBranchId =
+    authSession && authSession.role !== 'superadmin' ? authSession.branch_id : null;
 
   const printOrder = printOrderId
     ? erpState.workOrders.find((o) => o.id === printOrderId) ?? null
@@ -694,7 +1002,9 @@ export default function App() {
           }}
           onOpenReports={() => {
             const fallbackOrder =
-              erpState.workOrders.find((o) => o.id === selectedOrderId) ??
+              erpState.workOrders.find(
+                (o) => o.id === selectedOrderId && o.tenant_id === activeTenant.id
+              ) ??
               erpState.workOrders.find(
                 (o) =>
                   o.tenant_id === activeTenant.id &&
@@ -709,7 +1019,12 @@ export default function App() {
           }}
           activeRole={activeRole}
           onSelectRole={setActiveRole}
-          tenants={erpState.tenants}
+          tenants={getVisibleTenantsForScope(
+            erpState.tenants,
+            activeRole,
+            authSession,
+            activeTenant.id
+          )}
           activeTenant={activeTenant}
           onSelectTenant={handleSelectTenant}
           onOpenNewTenant={() => setShowNewTenantModal(true)}
@@ -721,7 +1036,13 @@ export default function App() {
           onSignOut={() => {
             setAuthSession(null);
             setActiveRole('admin');
+            setActiveTenantId(
+              erpState.tenants[0]?.id ?? '11111111-1111-4111-8111-111111111111'
+            );
             setActiveBranchId('ALL');
+            setSelectedOrderId(null);
+            setActiveSection('dashboard');
+            setGlobalSearch('');
           }}
           openOrdersCount={openOrdersCount}
           todayAppointmentsCount={scheduledAppointmentsCount}
@@ -733,6 +1054,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0">
         <ContextHeader
           activeSection={activeSection}
+          activeRole={activeRole}
           branches={erpState.branches}
           activeTenantId={activeTenant.id}
           activeBranchId={activeBranchId}
@@ -758,6 +1080,16 @@ export default function App() {
         />
 
         <main className="flex-1 min-w-0 p-4 lg:p-6 max-w-[1600px] w-full mx-auto">
+          {syncError && (
+            <AlertBanner
+              variant="error"
+              title="Error de sincronización con Supabase"
+              message={syncError}
+              onDismiss={() => setSyncError(null)}
+              className="mb-4"
+            />
+          )}
+
           {activeSection === 'dashboard' && (
             <DashboardView
               tenant={activeTenant}
@@ -797,200 +1129,252 @@ export default function App() {
             />
           )}
 
-          {activeSection === 'console' && (
-            <OrderConsoleView
-              tenant={activeTenant}
-              branches={erpState.branches}
-              activeBranchId={activeBranchId}
-              activeRole={activeRole}
-              supabaseConfig={supabaseConfig}
-              activeUser={authSession}
-              orders={erpState.workOrders}
-              clients={erpState.clients}
-              assets={erpState.assets}
-              catalogItems={erpState.catalogItems}
-              loanAssets={erpState.loanAssets}
-              selectedOrderId={selectedOrderId}
-              onSelectOrder={setSelectedOrderId}
-              onUpdateOrder={handleUpdateOrder}
-              onUpdateClient={handleUpdateClient}
-              onUpdateAsset={handleUpdateAsset}
-              onAdjustCatalogStock={handleAdjustCatalogStock}
-              onAssignLoanAsset={handleAssignLoanAsset}
-              onReturnLoanAsset={handleReturnLoanAsset}
-              onDeleteOrderItem={(itemId) =>
-                void deleteOrderItemFromSupabase(supabaseConfig, itemId)
-              }
-              onDeleteOrderPhoto={(photoId) =>
-                void deleteOrderPhotoFromSupabase(supabaseConfig, photoId)
-              }
-              onOpenNewOrder={() => {
-                setOrderPrefill(null);
-                setShowNewOrderModal(true);
-              }}
-              onOpenPublicTrackWithCode={(code) => {
-                setTrackInitialCode(code);
-                navigateSection('track');
-              }}
-              onOpenPrintCenter={(orderId) => setPrintOrderId(orderId)}
-              externalSearchQuery={globalSearch}
-              onExternalSearchChange={setGlobalSearch}
-            />
-          )}
+          <Suspense fallback={lazyFallback}>
+            {activeSection === 'console' && (
+              <OrderConsoleView
+                tenant={activeTenant}
+                branches={erpState.branches}
+                activeBranchId={activeBranchId}
+                activeRole={activeRole}
+                supabaseConfig={supabaseConfig}
+                activeUser={authSession}
+                orders={erpState.workOrders}
+                clients={erpState.clients}
+                assets={erpState.assets}
+                catalogItems={erpState.catalogItems}
+                loanAssets={erpState.loanAssets}
+                selectedOrderId={selectedOrderId}
+                onSelectOrder={setSelectedOrderId}
+                onUpdateOrder={handleUpdateOrder}
+                onUpdateClient={handleUpdateClient}
+                onUpdateAsset={handleUpdateAsset}
+                onAdjustCatalogStock={handleAdjustCatalogStock}
+                onAssignLoanAsset={handleAssignLoanAsset}
+                onReturnLoanAsset={handleReturnLoanAsset}
+                onDeleteOrderItem={(itemId) =>
+                  trackSync(deleteOrderItemFromSupabase(supabaseConfig, itemId))
+                }
+                onDeleteOrderPhoto={(photoId, photoUrl) =>
+                  trackSync(deleteOrderPhotoFromSupabase(supabaseConfig, photoId, photoUrl))
+                }
+                onDeleteOrderPayment={(paymentId) =>
+                  trackSync(deleteOrderPaymentFromSupabase(supabaseConfig, paymentId))
+                }
+                onOpenNewOrder={() => {
+                  setOrderPrefill(null);
+                  setShowNewOrderModal(true);
+                }}
+                onOpenPublicTrackWithCode={(code) => {
+                  setTrackInitialCode(code);
+                  navigateSection('track');
+                }}
+                onOpenPrintCenter={(orderId) => setPrintOrderId(orderId)}
+                externalSearchQuery={globalSearch}
+                onExternalSearchChange={setGlobalSearch}
+              />
+            )}
 
-          {activeSection === 'appointments' && (
-            <AppointmentsView
-              tenant={activeTenant}
-              branches={erpState.branches}
-              activeBranchId={activeBranchId}
-              clients={erpState.clients}
-              orders={erpState.workOrders}
-              appointments={erpState.appointments}
-              onAddAppointment={handleAddAppointment}
-              onUpdateAppointment={handleUpdateAppointment}
-              onConvertToOrder={handleConvertAppointmentToOrder}
-              onOpenOrder={(id) => {
-                setSelectedOrderId(id);
-                navigateSection('console');
-              }}
-            />
-          )}
+            {activeSection === 'appointments' && (
+              <AppointmentsView
+                tenant={activeTenant}
+                branches={erpState.branches}
+                appUsers={
+                  allowGlobalScope
+                    ? erpState.appUsers
+                    : erpState.appUsers.filter((u) => u.tenant_id === activeTenant.id)
+                }
+                activeBranchId={activeBranchId}
+                lockedBranchId={lockedBranchId}
+                activeRole={activeRole}
+                clients={erpState.clients}
+                orders={erpState.workOrders}
+                appointments={erpState.appointments}
+                onAddAppointment={handleAddAppointment}
+                onUpdateAppointment={handleUpdateAppointment}
+                onConvertToOrder={handleConvertAppointmentToOrder}
+                onOpenOrder={(id) => {
+                  setSelectedOrderId(id);
+                  navigateSection('console');
+                }}
+              />
+            )}
 
-          {activeSection === 'clients' && (
-            <ClientsAssetsView
-              tenant={activeTenant}
-              clients={erpState.clients}
-              assets={erpState.assets}
-              orders={erpState.workOrders}
-              onAddClient={handleAddClient}
-              onOpenOrder={(id) => {
-                setSelectedOrderId(id);
-                navigateSection('console');
-              }}
-            />
-          )}
+            {activeSection === 'clients' && (
+              <ClientsAssetsView
+                tenant={activeTenant}
+                activeRole={activeRole}
+                clients={erpState.clients}
+                assets={erpState.assets}
+                orders={erpState.workOrders}
+                onAddClient={handleAddClient}
+                onUpdateClient={handleUpdateClient}
+                onOpenOrder={(id) => {
+                  setSelectedOrderId(id);
+                  navigateSection('console');
+                }}
+              />
+            )}
 
-          {activeSection === 'inventory' && (
-            <InventoryLoansView
-              tenant={activeTenant}
-              branches={erpState.branches}
-              activeBranchId={activeBranchId}
-              activeRole={activeRole}
-              catalogItems={erpState.catalogItems}
-              loanAssets={erpState.loanAssets}
-              onAddCatalogItem={handleAddCatalogItem}
-              onAdjustStock={handleAdjustCatalogStock}
-              onAddLoanAsset={handleAddLoanAsset}
-              onUpdateLoanStatus={handleUpdateLoanStatus}
-            />
-          )}
+            {activeSection === 'inventory' && (
+              <InventoryLoansView
+                tenant={activeTenant}
+                branches={erpState.branches}
+                activeBranchId={activeBranchId}
+                lockedBranchId={lockedBranchId}
+                activeRole={activeRole}
+                catalogItems={erpState.catalogItems}
+                loanAssets={erpState.loanAssets}
+                onAddCatalogItem={handleAddCatalogItem}
+                onAdjustStock={handleAdjustCatalogStock}
+                onAddLoanAsset={handleAddLoanAsset}
+                onUpdateLoanStatus={handleUpdateLoanStatus}
+              />
+            )}
 
-          {activeSection === 'settings' && (
-            <SettingsBranchesView
-              tenant={activeTenant}
-              branches={erpState.branches}
-              appUsers={erpState.appUsers}
-              activeRole={activeRole}
-              initialTab={settingsInitialTab}
-              onUpdateTenant={handleUpdateTenant}
-              onAddBranch={handleAddBranch}
-              onDeleteBranch={handleDeleteBranch}
-              onAddAppUser={handleAddAppUser}
-              onUpdateAppUser={handleUpdateAppUser}
-            />
-          )}
+            {activeSection === 'settings' && (
+              <SettingsBranchesView
+                tenant={activeTenant}
+                tenants={getVisibleTenantsForScope(
+                  erpState.tenants,
+                  activeRole,
+                  authSession,
+                  activeTenant.id
+                )}
+                branches={erpState.branches}
+                appUsers={
+                  allowGlobalScope
+                    ? erpState.appUsers
+                    : erpState.appUsers.filter((u) => u.tenant_id === activeTenant.id)
+                }
+                activeRole={activeRole}
+                sessionRole={authSession?.role}
+                currentUserId={authSession?.id}
+                initialTab={settingsInitialTab}
+                onUpdateTenant={handleUpdateTenant}
+                onAddBranch={handleAddBranch}
+                onDeleteBranch={handleDeleteBranch}
+                onAddAppUser={handleAddAppUser}
+                onUpdateAppUser={handleUpdateAppUser}
+                onDeleteAppUser={handleDeleteAppUser}
+              />
+            )}
 
-          {activeSection === 'migration' && (
-            <LegacyMigratorView
-              erpState={erpState}
-              activeTenant={activeTenant}
-              branches={erpState.branches}
-              supabaseConfig={supabaseConfig}
-              onApplyMigratedState={(nextState) => {
-                setErpState(nextState);
-                const latestOrder = nextState.workOrders.find(
-                  (o) => o.tenant_id === activeTenant.id
-                );
-                if (latestOrder) setSelectedOrderId(latestOrder.id);
-              }}
-              onGoToConsole={() => navigateSection('console')}
-            />
-          )}
+            {activeSection === 'migration' && (
+              <LegacyMigratorView
+                erpState={erpState}
+                activeTenant={activeTenant}
+                branches={erpState.branches}
+                supabaseConfig={supabaseConfig}
+                allowGlobalView={allowGlobalScope}
+                onApplyMigratedState={(nextState) => {
+                  setErpState(nextState);
+                  const latestOrder = nextState.workOrders.find(
+                    (o) => o.tenant_id === activeTenant.id
+                  );
+                  if (latestOrder) setSelectedOrderId(latestOrder.id);
+                }}
+                onGoToConsole={() => navigateSection('console')}
+              />
+            )}
+          </Suspense>
         </main>
       </div>
 
-      {showNewOrderModal && (
-        <NewOrderModal
-          tenant={activeTenant}
-          branches={erpState.branches}
-          activeBranchId={activeBranchId}
-          clients={erpState.clients}
-          assets={erpState.assets}
-          existingOrders={erpState.workOrders}
-          initialPrefill={orderPrefill}
-          onClose={() => {
-            setShowNewOrderModal(false);
-            setOrderPrefill(null);
-          }}
-          onCreate={handleCreateOrder}
-        />
-      )}
+      <Suspense fallback={null}>
+        {showNewOrderModal && (
+          <NewOrderModal
+            tenant={activeTenant}
+            branches={erpState.branches}
+            appUsers={
+              allowGlobalScope
+                ? erpState.appUsers
+                : erpState.appUsers.filter((u) => u.tenant_id === activeTenant.id)
+            }
+            activeBranchId={activeBranchId}
+            lockedBranchId={lockedBranchId}
+            clients={erpState.clients}
+            assets={erpState.assets}
+            existingOrders={erpState.workOrders}
+            initialPrefill={orderPrefill}
+            onClose={() => {
+              setShowNewOrderModal(false);
+              setOrderPrefill(null);
+            }}
+            onCreate={handleCreateOrder}
+          />
+        )}
 
-      {showSupabaseModal && (
-        <SupabaseModal
-          config={supabaseConfig}
-          onSaveConfig={setSupabaseConfig}
-          onSyncFromSupabase={handleSyncFromSupabase}
-          onResetDemoData={() => {
-            const fresh = resetErpState();
-            setErpState(fresh);
-            setActiveTenantId(fresh.tenants[0].id);
-            setActiveBranchId('ALL');
-            setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
-          }}
-          onClose={() => setShowSupabaseModal(false)}
-        />
-      )}
+        {showSupabaseModal && allowGlobalScope && (
+          <SupabaseModal
+            config={supabaseConfig}
+            onSaveConfig={setSupabaseConfig}
+            onSyncFromSupabase={handleSyncFromSupabase}
+            onResetDemoData={() => {
+              const fresh = resetErpState();
+              setErpState(fresh);
+              setActiveTenantId(fresh.tenants[0].id);
+              setActiveBranchId('ALL');
+              setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
+            }}
+            onClose={() => setShowSupabaseModal(false)}
+          />
+        )}
 
-      {showAuthModal && (
-        <AuthModal
-          supabaseConfig={supabaseConfig}
-          appUsers={erpState.appUsers}
-          tenants={erpState.tenants}
-          branches={erpState.branches}
-          onAuthSuccess={(user) => {
-            setErpState((prev) => ({
-              ...prev,
-              tenants:
-                user.tenant && !prev.tenants.some((t) => t.id === user.tenant!.id)
-                  ? [...prev.tenants, user.tenant]
-                  : prev.tenants,
-              branches:
-                user.branch && !prev.branches.some((b) => b.id === user.branch!.id)
-                  ? [...prev.branches, user.branch]
-                  : prev.branches,
-            }));
-            setAuthSession(user);
-            if (user.tenant_id) setActiveTenantId(user.tenant_id);
-            setActiveBranchId(user.branch_id ?? 'ALL');
-            setActiveRole(user.role);
-            setSelectedOrderId(null);
-            setShowAuthModal(false);
-          }}
-          onClose={() => setShowAuthModal(false)}
-        />
-      )}
+        {showAuthModal && (
+          <AuthModal
+            supabaseConfig={supabaseConfig}
+            appUsers={erpState.appUsers}
+            tenants={erpState.tenants}
+            branches={erpState.branches}
+            currentUserRole={authSession?.role}
+            onAuthSuccess={(user) => {
+              setErpState((prev) => ({
+                ...prev,
+                tenants:
+                  user.tenant && !prev.tenants.some((t) => t.id === user.tenant!.id)
+                    ? [...prev.tenants, user.tenant]
+                    : prev.tenants,
+                branches:
+                  user.branch && !prev.branches.some((b) => b.id === user.branch!.id)
+                    ? [...prev.branches, user.branch]
+                    : prev.branches,
+              }));
+              setAuthSession(user);
+              if (user.tenant_id) setActiveTenantId(user.tenant_id);
+              setActiveBranchId(user.branch_id ?? 'ALL');
+              setActiveRole(user.role);
+              setSelectedOrderId(null);
+              setShowAuthModal(false);
+            }}
+            onClose={() => setShowAuthModal(false)}
+          />
+        )}
+      </Suspense>
       </div>
 
-      {showNewTenantModal && (
-        <NewTenantModal
-          onClose={() => setShowNewTenantModal(false)}
-          onCreate={(input) => {
-            handleCreateTenant(input);
-            setShowNewTenantModal(false);
-          }}
-        />
-      )}
+      <Suspense fallback={null}>
+        {showNewTenantModal && (
+          <NewTenantModal
+            onClose={() => setShowNewTenantModal(false)}
+            onCreate={(input) => {
+              handleCreateTenant(input);
+              setShowNewTenantModal(false);
+            }}
+          />
+        )}
+
+        {printOrder && (
+          <PrintCenterModal
+            order={printOrder}
+            tenant={printTenant}
+            branch={printBranch}
+            client={printClient}
+            asset={printAsset}
+            loanAssets={erpState.loanAssets}
+            onClose={() => setPrintOrderId(null)}
+          />
+        )}
+      </Suspense>
 
       {orderCreatedConfirm && (
         <ConfirmSuccessModal
@@ -1009,18 +1393,6 @@ export default function App() {
             setOrderCreatedConfirm(null);
             setPrintOrderId(id);
           }}
-        />
-      )}
-
-      {printOrder && (
-        <PrintCenterModal
-          order={printOrder}
-          tenant={printTenant}
-          branch={printBranch}
-          client={printClient}
-          asset={printAsset}
-          loanAssets={erpState.loanAssets}
-          onClose={() => setPrintOrderId(null)}
         />
       )}
     </>

@@ -216,17 +216,6 @@ export interface Appointment {
   created_at: string;
 }
 
-export interface TeamProfile {
-  id: string;
-  tenant_id: string;
-  branch_id: string | null; // null = Casa Matriz (acceso todas las sucursales)
-  full_name: string;
-  email: string;
-  role: RoleType;
-  active: boolean;
-  created_at: string;
-}
-
 export interface AppUser {
   id: string;
   tenant_id: string | null;
@@ -266,7 +255,6 @@ export interface SupabaseConfig {
 export interface ErpState {
   tenants: Tenant[];
   branches: Branch[];
-  profiles: TeamProfile[];
   appUsers: AppUser[];
   clients: Client[];
   assets: CustomerAsset[];

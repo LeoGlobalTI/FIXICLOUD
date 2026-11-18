@@ -4,10 +4,12 @@ import type {
   AppUser,
   AuthSessionUser,
   Branch,
+  RoleType,
   SupabaseConfig,
   Tenant,
 } from '../types/erp';
-import { isSupabaseLive, loginWithAppUsers } from '../services/supabaseService';
+import { isSupabaseLive } from '../services/supabaseService';
+import { authenticateUser } from '../utils/authHelper';
 import { AlertBanner } from './ui/AlertBanner';
 
 interface AuthModalProps {
@@ -15,6 +17,7 @@ interface AuthModalProps {
   appUsers: AppUser[];
   tenants: Tenant[];
   branches: Branch[];
+  currentUserRole?: RoleType | null;
   onAuthSuccess: (user: AuthSessionUser) => void;
   onClose: () => void;
 }
@@ -24,6 +27,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   appUsers,
   tenants,
   branches,
+  currentUserRole = null,
   onAuthSuccess,
   onClose,
 }) => {
@@ -33,71 +37,27 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const liveMode = isSupabaseLive(supabaseConfig);
-
-  const handleQuickSuperAdminFill = () => {
-    setUsername('admin');
-    setPassword('123456');
-    setErrorMsg(null);
-  };
+  const canShowDemoQuickChips =
+    !liveMode && (!currentUserRole || currentUserRole === 'superadmin');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
-
-    const cleanUsername = username.trim();
-    const cleanPassword = password.trim();
-
-    if (!cleanUsername || !cleanPassword) {
-      setErrorMsg('Ingresa tu usuario y contraseña / PIN para continuar.');
-      return;
-    }
-
-    if (liveMode) {
-      setLoading(true);
-      const res = await loginWithAppUsers(supabaseConfig, cleanUsername, cleanPassword);
-      setLoading(false);
-      if (!res.ok || !res.user) {
-        setErrorMsg(
-          res.error ?? 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.'
-        );
-        return;
-      }
-      onAuthSuccess(res.user);
-      return;
-    }
-
-    // Demo Local Mode: validate against local appUsers mirror
-    const matched = appUsers.find(
-      (u) =>
-        u.username.trim().toLowerCase() === cleanUsername.toLowerCase() &&
-        u.pin_or_password.trim() === cleanPassword &&
-        u.is_active
-    );
-
-    if (!matched) {
-      setErrorMsg('Usuario o contraseña/PIN incorrectos, o cuenta inactiva.');
-      return;
-    }
-
-    const matchedTenant = matched.tenant_id
-      ? tenants.find((t) => t.id === matched.tenant_id) ?? null
-      : null;
-    const matchedBranch = matched.branch_id
-      ? branches.find((b) => b.id === matched.branch_id) ?? null
-      : null;
-
-    onAuthSuccess({
-      id: matched.id,
-      username: matched.username,
-      full_name: matched.full_name,
-      tenant_id: matched.tenant_id,
-      branch_id: matched.branch_id,
-      role: matched.role,
-      is_active: matched.is_active,
-      mode: 'demo',
-      tenant: matchedTenant,
-      branch: matchedBranch,
+    setLoading(true);
+    const res = await authenticateUser({
+      supabaseConfig,
+      appUsers,
+      tenants,
+      branches,
+      username,
+      password,
     });
+    setLoading(false);
+    if (!res.ok) {
+      setErrorMsg(res.error);
+      return;
+    }
+    onAuthSuccess(res.user);
   };
 
   return (
@@ -199,42 +159,45 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </button>
           </form>
 
-          <div className="border-t border-[#D8E4EC] pt-3.5 space-y-2.5">
-            <button
-              type="button"
-              onClick={handleQuickSuperAdminFill}
-              className="w-full inline-flex items-center justify-center gap-1.5 rounded-xl border border-[#3E92CC]/40 bg-[#EBF4FA] hover:bg-[#3E92CC]/15 text-[#0A2463] py-2 px-3 text-xs font-semibold transition-colors"
-            >
-              <span>⚡ Acceso Rápido SuperAdmin</span>
-            </button>
-
-            {!liveMode && appUsers.length > 0 && (
-              <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC] p-3 space-y-1.5">
-                <div className="text-[11px] font-semibold text-slate-600">
-                  Usuarios Demo disponibles (clic para autocompletar):
-                </div>
-                <div className="flex flex-wrap gap-1.5">
-                  {appUsers
-                    .filter((u) => u.is_active)
-                    .slice(0, 5)
-                    .map((u) => (
-                      <button
-                        key={u.id}
-                        type="button"
-                        onClick={() => {
-                          setUsername(u.username);
-                          setPassword(u.pin_or_password);
-                          setErrorMsg(null);
-                        }}
-                        className="rounded-lg border border-[#D8E4EC] bg-white hover:border-[#3E92CC] px-2 py-1 text-[11px] font-mono text-slate-700 transition-colors"
-                      >
-                        @{u.username}
-                      </button>
-                    ))}
+          {canShowDemoQuickChips &&
+            appUsers.some(
+              (u) =>
+                u.is_active &&
+                u.role !== 'superadmin' &&
+                u.pin_or_password.trim().length > 0
+            ) && (
+              <div className="border-t border-[#D8E4EC] pt-3.5">
+                <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC] p-3 space-y-1.5">
+                  <div className="text-[11px] font-semibold text-slate-600">
+                    Usuarios Demo disponibles (clic para usar usuario):
+                  </div>
+                  <div className="flex flex-wrap gap-1.5">
+                    {appUsers
+                      .filter(
+                        (u) =>
+                          u.is_active &&
+                          u.role !== 'superadmin' &&
+                          u.pin_or_password.trim().length > 0
+                      )
+                      .slice(0, 5)
+                      .map((u) => (
+                        <button
+                          key={u.id}
+                          type="button"
+                          onClick={() => {
+                            setUsername(u.username);
+                            setPassword('');
+                            setErrorMsg(null);
+                          }}
+                          className="rounded-lg border border-[#D8E4EC] bg-white hover:border-[#3E92CC] px-2 py-1 text-[11px] font-mono text-slate-700 transition-colors"
+                        >
+                          @{u.username}
+                        </button>
+                      ))}
+                  </div>
                 </div>
               </div>
             )}
-          </div>
         </div>
       </div>
     </div>

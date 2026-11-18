@@ -99,19 +99,27 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
       o.folio.toUpperCase() === normalized
   );
 
-  const matchedOrder = rpcPayload?.order ?? localMatchedOrder;
-  const tenant =
-    rpcPayload?.tenant ??
-    (matchedOrder ? tenants.find((t) => t.id === matchedOrder.tenant_id) : undefined);
-  const branch =
-    rpcPayload?.branch ??
-    (matchedOrder ? branches.find((b) => b.id === matchedOrder.branch_id) : undefined);
-  const client =
-    rpcPayload?.client ??
-    (matchedOrder ? clients.find((c) => c.id === matchedOrder.client_id) : undefined);
-  const asset =
-    rpcPayload?.asset ??
-    (matchedOrder ? assets.find((a) => a.id === matchedOrder.asset_id) : undefined);
+  const matchedOrder = (liveMode && rpcPayload?.order) ? rpcPayload.order : localMatchedOrder;
+  const tenant = (liveMode && rpcPayload?.tenant)
+    ? rpcPayload.tenant
+    : matchedOrder
+    ? tenants.find((t) => t.id === matchedOrder.tenant_id)
+    : undefined;
+  const branch = (liveMode && rpcPayload?.branch)
+    ? rpcPayload.branch
+    : matchedOrder
+    ? branches.find((b) => b.id === matchedOrder.branch_id)
+    : undefined;
+  const client = (liveMode && rpcPayload?.client)
+    ? rpcPayload.client
+    : matchedOrder
+    ? clients.find((c) => c.id === matchedOrder.client_id)
+    : undefined;
+  const asset = (liveMode && rpcPayload?.asset)
+    ? rpcPayload.asset
+    : matchedOrder
+    ? assets.find((a) => a.id === matchedOrder.asset_id)
+    : undefined;
 
   const financials =
     matchedOrder && tenant
@@ -140,7 +148,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
             </div>
             <div>
               <div className="font-display text-sm font-bold tracking-tight">
-                FIXICLOUD — Portal de Seguimiento
+                FixiCloud — Portal de Seguimiento
               </div>
               <div className="text-[11px] text-[#D8E4EC]/80">
                 Consulta en línea para clientes
@@ -154,7 +162,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
             className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-[#1E3A8A] hover:bg-[#3E92CC] px-3.5 py-2 text-xs font-semibold text-white whitespace-nowrap transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            <span>Volver al ERP Taller</span>
+            <span>Volver al Taller FixiCloud</span>
           </button>
         </div>
       </header>
@@ -190,28 +198,6 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               Consultar Estado
             </button>
           </form>
-
-            {/* Demo Quick Test Buttons */}
-          <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-            <span className="text-slate-500 font-medium">Códigos de prueba rápida:</span>
-            {orders.slice(0, 5).map((ord) => (
-              <button
-                key={ord.id}
-                type="button"
-                onClick={() => {
-                  setInputCode(ord.tracking_code);
-                  setSearchedCode(ord.tracking_code);
-                }}
-                className={`rounded-xl border px-3 py-1.5 font-mono text-xs transition-colors ${
-                  normalized === ord.tracking_code.toUpperCase()
-                    ? 'bg-[#EBF4FA] border-[#3E92CC]/40 text-[#0A2463] font-bold'
-                    : 'bg-[#F4F6FB] border-[#D8E4EC] text-slate-700 hover:bg-white hover:border-[#3E92CC]/40'
-                }`}
-              >
-                {ord.tracking_code} ({ord.folio})
-              </button>
-            ))}
-          </div>
         </section>
 
         {rpcLoading ? (
@@ -224,7 +210,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               No encontramos una orden con el código &ldquo;{searchedCode}&rdquo;
             </p>
             <p className="mt-1 text-xs text-slate-500">
-              Verifica el código impreso en tu comprobante de ingreso o prueba uno de los códigos demo arriba.
+              Verifica el código impreso en tu comprobante de ingreso o consulta directamente con tu taller.
             </p>
           </div>
         ) : (
@@ -477,6 +463,18 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
           </div>
         )}
       </main>
+
+      <footer className="mt-8 pb-6 text-center text-xs text-slate-500 border-t border-[#D8E4EC]/70 pt-4">
+        FIXICLOUD Portal de Seguimiento · Desarrollado por{' '}
+        <a
+          href="https://www.gtitech.cl"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-semibold text-[#3E92CC] hover:underline"
+        >
+          Global TI SPA
+        </a>
+      </footer>
 
       {lightboxPhoto && (
         <div

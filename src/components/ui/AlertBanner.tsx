@@ -1,7 +1,7 @@
 import React from 'react';
-import { AlertCircle, CheckCircle2, Info, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Info, X } from 'lucide-react';
 
-export type AlertBannerVariant = 'success' | 'info' | 'error';
+type AlertBannerVariant = 'success' | 'info' | 'warning' | 'error';
 
 interface AlertBannerProps {
   variant: AlertBannerVariant;
@@ -36,6 +36,13 @@ const VARIANT_STYLES: Record<
     titleColor: 'text-[#0A2463]',
     textColor: 'text-[#1E4F7A]',
   },
+  warning: {
+    container: 'bg-[#FFF8EC] border-[#F4A261]/40',
+    iconBg: 'bg-[#D97706] text-white',
+    iconColor: 'text-[#D97706]',
+    titleColor: 'text-[#92400E]',
+    textColor: 'text-[#92400E]',
+  },
   error: {
     container: 'bg-[#FDEDED] border-[#D64545]/30',
     iconBg: 'bg-[#D64545] text-white',
@@ -59,6 +66,8 @@ export const AlertBanner: React.FC<AlertBannerProps> = ({
       ? CheckCircle2
       : variant === 'info'
       ? Info
+      : variant === 'warning'
+      ? AlertTriangle
       : AlertCircle;
 
   return (

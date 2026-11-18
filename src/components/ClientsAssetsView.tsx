@@ -1,26 +1,31 @@
-import React, { useMemo, useState } from 'react';
-import { Laptop, Plus, Search, User, Wrench } from 'lucide-react';
-import type { Client, CustomerAsset, Tenant, WorkOrder } from '../types/erp';
-import { ORDER_STATUS_META } from '../utils/erpLogic';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Check, Laptop, Pencil, Plus, Search, User, Wrench } from 'lucide-react';
+import type { Client, CustomerAsset, RoleType, Tenant, WorkOrder } from '../types/erp';
+import { getRolePermissions, ORDER_STATUS_META } from '../utils/erpLogic';
 import { generateUUID } from '../utils/uuid';
 
 interface ClientsAssetsViewProps {
   tenant: Tenant;
+  activeRole: RoleType;
   clients: Client[];
   assets: CustomerAsset[];
   orders: WorkOrder[];
   onAddClient: (client: Client) => void;
+  onUpdateClient: (client: Client) => void;
   onOpenOrder: (orderId: string) => void;
 }
 
 export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
   tenant,
+  activeRole,
   clients,
   assets,
   orders,
   onAddClient,
+  onUpdateClient,
   onOpenOrder,
 }) => {
+  const perms = getRolePermissions(activeRole);
   const [query, setQuery] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
@@ -32,12 +37,57 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
   const [address, setAddress] = useState('');
   const [city, setCity] = useState('');
 
+  // Edit active client draft
+  const [editingClient, setEditingClient] = useState(false);
+  const [editDraft, setEditDraft] = useState({
+    name: '',
+    rut: '',
+    phone: '',
+    email: '',
+    address: '',
+    city: '',
+  });
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
+  const assetsByClient = useMemo(() => {
+    const map = new Map<string, CustomerAsset[]>();
+    for (const a of assets) {
+      if (a.tenant_id !== tenant.id) continue;
+      const list = map.get(a.client_id) ?? [];
+      list.push(a);
+      map.set(a.client_id, list);
+    }
+    return map;
+  }, [assets, tenant.id]);
+
+  const ordersByClient = useMemo(() => {
+    const map = new Map<string, WorkOrder[]>();
+    for (const o of orders) {
+      if (o.tenant_id !== tenant.id) continue;
+      const list = map.get(o.client_id) ?? [];
+      list.push(o);
+      map.set(o.client_id, list);
+    }
+    return map;
+  }, [orders, tenant.id]);
+
+  const ordersByAsset = useMemo(() => {
+    const map = new Map<string, WorkOrder[]>();
+    for (const o of orders) {
+      if (o.tenant_id !== tenant.id) continue;
+      const list = map.get(o.asset_id) ?? [];
+      list.push(o);
+      map.set(o.asset_id, list);
+    }
+    return map;
+  }, [orders, tenant.id]);
+
   const tenantClients = useMemo(() => {
     const q = query.trim().toLowerCase();
     return clients.filter((c) => {
       if (c.tenant_id !== tenant.id) return false;
       if (!q) return true;
-      const clientAssets = assets.filter((a) => a.client_id === c.id);
+      const clientAssets = assetsByClient.get(c.id) ?? [];
       return (
         c.name.toLowerCase().includes(q) ||
         c.rut.toLowerCase().includes(q) ||
@@ -50,18 +100,33 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
         )
       );
     });
-  }, [clients, assets, tenant.id, query]);
+  }, [clients, assetsByClient, tenant.id, query]);
 
   const activeClient =
     tenantClients.find((c) => c.id === selectedClientId) ?? tenantClients[0] ?? null;
 
+  useEffect(() => {
+    setEditingClient(false);
+    setSavedNotice(null);
+    if (activeClient) {
+      setEditDraft({
+        name: activeClient.name,
+        rut: activeClient.rut,
+        phone: activeClient.phone,
+        email: activeClient.email,
+        address: activeClient.address,
+        city: activeClient.city,
+      });
+    }
+  }, [activeClient?.id]);
+
   const activeClientAssets = activeClient
-    ? assets.filter((a) => a.client_id === activeClient.id)
+    ? assetsByClient.get(activeClient.id) ?? []
     : [];
 
   const handleCreateClient = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    if (!perms.canManageClients || !name.trim()) return;
     const newClient: Client = {
       id: generateUUID(),
       tenant_id: tenant.id,
@@ -83,6 +148,22 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
     setShowCreate(false);
   };
 
+  const handleSaveClientEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!perms.canManageClients || !activeClient || !editDraft.name.trim()) return;
+    onUpdateClient({
+      ...activeClient,
+      name: editDraft.name.trim(),
+      rut: editDraft.rut.trim() || 'S/R',
+      phone: editDraft.phone.trim() || '+56 9 0000 0000',
+      email: editDraft.email.trim(),
+      address: editDraft.address.trim(),
+      city: editDraft.city.trim(),
+    });
+    setEditingClient(false);
+    setSavedNotice('Datos del cliente actualizados.');
+  };
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -97,17 +178,19 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
             cliente(s) registrados con historial técnico por número de serie o IMEI.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setShowCreate((v) => !v)}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2 text-xs font-semibold whitespace-nowrap transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          <span>Nuevo Cliente</span>
-        </button>
+        {perms.canManageClients && (
+          <button
+            type="button"
+            onClick={() => setShowCreate((v) => !v)}
+            className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2 text-xs font-semibold whitespace-nowrap transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            <span>Nuevo Cliente</span>
+          </button>
+        )}
       </div>
 
-      {showCreate && (
+      {perms.canManageClients && showCreate && (
         <form
           onSubmit={handleCreateClient}
           className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4"
@@ -199,8 +282,8 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
               </div>
             ) : (
               tenantClients.map((client) => {
-                const countAssets = assets.filter((a) => a.client_id === client.id).length;
-                const countOrders = orders.filter((o) => o.client_id === client.id).length;
+                const countAssets = (assetsByClient.get(client.id) ?? []).length;
+                const countOrders = (ordersByClient.get(client.id) ?? []).length;
                 const isSelected = activeClient?.id === client.id;
                 return (
                   <button
@@ -242,34 +325,129 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
             </div>
           ) : (
             <>
-              <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6">
-                <div className="flex items-start gap-3">
-                  <div className="h-11 w-11 rounded-xl bg-[#0A2463] text-white flex items-center justify-center shrink-0">
-                    <User className="h-5 w-5 text-[#6EC1F8]" />
-                  </div>
-                  <div className="min-w-0">
-                    <h2 className="text-base font-semibold text-slate-900">
-                      {activeClient.name}
-                    </h2>
-                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
-                      <span className="font-mono text-[#0A2463] font-medium">
-                        RUT: {activeClient.rut}
-                      </span>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-mono">{activeClient.phone}</span>
-                      {activeClient.email && (
-                        <>
-                          <span className="text-slate-300">·</span>
-                          <span>{activeClient.email}</span>
-                        </>
-                      )}
+              <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-3 min-w-0">
+                    <div className="h-11 w-11 rounded-xl bg-[#0A2463] text-white flex items-center justify-center shrink-0">
+                      <User className="h-5 w-5 text-[#6EC1F8]" />
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {activeClient.address}
-                      {activeClient.city ? `, ${activeClient.city}` : ''}
+                    <div className="min-w-0">
+                      <h2 className="text-base font-semibold text-slate-900">
+                        {activeClient.name}
+                      </h2>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-slate-600">
+                        <span className="font-mono text-[#0A2463] font-medium">
+                          RUT: {activeClient.rut}
+                        </span>
+                        <span className="text-slate-300">·</span>
+                        <span className="font-mono">{activeClient.phone}</span>
+                        {activeClient.email && (
+                          <>
+                            <span className="text-slate-300">·</span>
+                            <span>{activeClient.email}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {activeClient.address}
+                        {activeClient.city ? `, ${activeClient.city}` : ''}
+                      </div>
                     </div>
                   </div>
+                  {perms.canManageClients && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSavedNotice(null);
+                        setEditingClient((v) => !v);
+                      }}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-[#0A2463] shrink-0 transition-colors"
+                    >
+                      <Pencil className="h-3.5 w-3.5 text-[#3E92CC]" />
+                      <span>{editingClient ? 'Cancelar' : 'Editar Cliente'}</span>
+                    </button>
+                  )}
                 </div>
+
+                {savedNotice && (
+                  <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 px-3 py-2 text-xs font-semibold text-[#157A6E]">
+                    {savedNotice}
+                  </div>
+                )}
+
+                {perms.canManageClients && editingClient && (
+                  <form
+                    onSubmit={handleSaveClientEdit}
+                    className="pt-3 border-t border-[#D8E4EC]/70 space-y-3"
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <input
+                        type="text"
+                        required
+                        value={editDraft.name}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, name: e.target.value }))
+                        }
+                        placeholder="Nombre completo *"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editDraft.rut}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, rut: e.target.value }))
+                        }
+                        placeholder="RUT / ID"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editDraft.phone}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, phone: e.target.value }))
+                        }
+                        placeholder="Teléfono"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="email"
+                        value={editDraft.email}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, email: e.target.value }))
+                        }
+                        placeholder="Email"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editDraft.address}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, address: e.target.value }))
+                        }
+                        placeholder="Dirección"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={editDraft.city}
+                        onChange={(e) =>
+                          setEditDraft((d) => ({ ...d, city: e.target.value }))
+                        }
+                        placeholder="Ciudad"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex justify-end">
+                      <button
+                        type="submit"
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] px-4 py-2 text-xs font-semibold text-white transition-colors"
+                      >
+                        <Check className="h-3.5 w-3.5" />
+                        <span>Guardar Cambios</span>
+                      </button>
+                    </div>
+                  </form>
+                )}
               </div>
 
               <div className="space-y-3">
@@ -282,7 +460,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                   </div>
                 ) : (
                   activeClientAssets.map((asset) => {
-                    const assetOrders = orders.filter((o) => o.asset_id === asset.id);
+                    const assetOrders = ordersByAsset.get(asset.id) ?? [];
                     return (
                       <div
                         key={asset.id}

@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import type {
+  AppUser,
   Branch,
   Client,
   CustomerAsset,
@@ -11,9 +12,12 @@ import type {
 import {
   generateNextFolio,
   generateTrackingCode,
+  getDefaultAssetCategoryForSector,
+  getDefaultTenantTechnicianName,
   getSectorCustomFields,
 } from '../utils/erpLogic';
 import { generateUUID } from '../utils/uuid';
+import { AlertBanner } from './ui/AlertBanner';
 
 export interface NewOrderPrefill {
   clientId?: string;
@@ -29,7 +33,9 @@ export interface NewOrderPrefill {
 interface NewOrderModalProps {
   tenant: Tenant;
   branches: Branch[];
+  appUsers: AppUser[];
   activeBranchId: string;
+  lockedBranchId?: string | null;
   clients: Client[];
   assets: CustomerAsset[];
   existingOrders: WorkOrder[];
@@ -46,7 +52,9 @@ interface NewOrderModalProps {
 export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   tenant,
   branches,
+  appUsers,
   activeBranchId,
+  lockedBranchId,
   clients,
   assets,
   existingOrders,
@@ -55,15 +63,37 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   onCreate,
 }) => {
   const tenantBranches = branches.filter((b) => b.tenant_id === tenant.id);
+  const selectableBranches = lockedBranchId
+    ? tenantBranches.filter((b) => b.id === lockedBranchId)
+    : tenantBranches;
+  const effectiveBranches =
+    selectableBranches.length > 0 ? selectableBranches : tenantBranches;
+
   const defaultBranch =
-    initialPrefill?.branchId ??
-    (activeBranchId !== 'ALL'
+    lockedBranchId ||
+    initialPrefill?.branchId ||
+    (activeBranchId !== 'ALL' && tenantBranches.some((b) => b.id === activeBranchId)
       ? activeBranchId
-      : tenantBranches.find((b) => b.is_hq)?.id ?? tenantBranches[0]?.id ?? '');
+      : effectiveBranches.find((b) => b.is_hq)?.id ?? effectiveBranches[0]?.id ?? '');
 
   const tenantClients = clients.filter((c) => c.tenant_id === tenant.id);
-
   const [branchId, setBranchId] = useState(defaultBranch);
+
+  const tenantTechSuggestions = useMemo(() => {
+    const activeTechs = appUsers.filter(
+      (u) =>
+        u.is_active &&
+        u.tenant_id === tenant.id &&
+        (u.role === 'technician' || u.role === 'admin')
+    );
+    const sameBranch = activeTechs
+      .filter((u) => u.branch_id === branchId)
+      .map((u) => u.full_name);
+    const otherBranch = activeTechs
+      .filter((u) => u.branch_id !== branchId)
+      .map((u) => u.full_name);
+    return Array.from(new Set([...sameBranch, ...otherBranch]));
+  }, [appUsers, tenant.id, branchId]);
   const [clientMode, setClientMode] = useState<'existing' | 'new'>(
     initialPrefill?.clientId || tenantClients.length > 0 ? 'existing' : 'new'
   );
@@ -78,14 +108,9 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   const [clientEmail, setClientEmail] = useState('');
   const [clientAddress, setClientAddress] = useState('');
 
-  // Asset fields
-  const [category, setCategory] = useState(
-    tenant.sector === 'machinery'
-      ? 'Generador Eléctrico'
-      : tenant.sector === 'mobile'
-      ? 'Smartphone'
-      : 'Notebook'
-  );
+  // Asset fields (supports reusing an existing asset without duplication)
+  const [selectedExistingAssetId, setSelectedExistingAssetId] = useState<string | null>(null);
+  const [category, setCategory] = useState(getDefaultAssetCategoryForSector(tenant.sector));
   const [brand, setBrand] = useState('');
   const [model, setModel] = useState('');
   const [serialImei, setSerialImei] = useState('');
@@ -103,14 +128,34 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   const [accessories, setAccessories] = useState('');
   const [entryCondition, setEntryCondition] = useState('');
   const [symptoms, setSymptoms] = useState(initialPrefill?.symptoms ?? '');
-  const [technician, setTechnician] = useState(initialPrefill?.technician ?? 'Diego Torres');
+  const [technician, setTechnician] = useState(
+    initialPrefill?.technician ??
+      getDefaultTenantTechnicianName(appUsers, tenant.id, defaultBranch)
+  );
+
+  const [formError, setFormError] = useState<string | null>(null);
 
   const sectorFields = getSectorCustomFields(tenant.sector);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!brand.trim() || !model.trim() || !symptoms.trim()) return;
-    if (clientMode === 'new' && !clientName.trim()) return;
+    setFormError(null);
+    if (clientMode === 'new' && !clientName.trim()) {
+      setFormError('Ingresa el nombre o razón social del nuevo cliente.');
+      return;
+    }
+    if (clientMode === 'existing' && (!selectedClientId || !tenantClients.some((c) => c.id === selectedClientId))) {
+      setFormError('Selecciona un cliente válido o crea uno nuevo.');
+      return;
+    }
+    if (modality === 'home_service' && !visitAddress.trim()) {
+      setFormError('Ingresa la dirección de visita a domicilio.');
+      return;
+    }
+    if (!brand.trim() || !model.trim() || !symptoms.trim()) {
+      setFormError('Completa marca, modelo y síntomas reportados antes de crear la orden.');
+      return;
+    }
 
     const now = new Date().toISOString();
     let finalClientId = selectedClientId;
@@ -130,24 +175,39 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
       };
     }
 
-    const assetId = generateUUID();
-    const newAssetObj: CustomerAsset = {
-      id: assetId,
-      tenant_id: tenant.id,
-      client_id: finalClientId,
-      category: category.trim() || 'Equipo',
-      brand: brand.trim(),
-      model: model.trim(),
-      serial_imei: serialImei.trim() || 'S/N-PENDIENTE',
-      password_pattern: passwordPattern.trim() || undefined,
-      custom_attributes: customAttrs,
-    };
+    const reusedAsset =
+      clientMode === 'existing' && selectedExistingAssetId
+        ? assets.find(
+            (a) =>
+              a.id === selectedExistingAssetId &&
+              a.tenant_id === tenant.id &&
+              a.client_id === finalClientId
+          )
+        : undefined;
+
+    const assetId = reusedAsset ? reusedAsset.id : generateUUID();
+    const newAssetObj: CustomerAsset | undefined = reusedAsset
+      ? undefined
+      : {
+          id: assetId,
+          tenant_id: tenant.id,
+          client_id: finalClientId,
+          category: category.trim() || getDefaultAssetCategoryForSector(tenant.sector),
+          brand: brand.trim(),
+          model: model.trim(),
+          serial_imei: serialImei.trim() || 'S/N-PENDIENTE',
+          password_pattern: passwordPattern.trim() || undefined,
+          custom_attributes: customAttrs,
+        };
 
     const folio = generateNextFolio(tenant.folio_prefix, existingOrders, tenant.id);
+    const safeBranchId = effectiveBranches.some((b) => b.id === branchId)
+      ? branchId
+      : defaultBranch;
     const order: WorkOrder = {
       id: generateUUID(),
       tenant_id: tenant.id,
-      branch_id: branchId,
+      branch_id: safeBranchId,
       folio,
       tracking_code: generateTrackingCode(),
       client_id: finalClientId,
@@ -181,7 +241,9 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
     });
   };
 
-  const existingClientAssets = assets.filter((a) => a.client_id === selectedClientId);
+  const existingClientAssets = assets.filter(
+    (a) => a.tenant_id === tenant.id && a.client_id === selectedClientId
+  );
 
   return (
     <div
@@ -213,6 +275,13 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
+          {formError && (
+            <AlertBanner
+              variant="error"
+              message={formError}
+              onDismiss={() => setFormError(null)}
+            />
+          )}
           {/* Branch & Modality */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
@@ -221,10 +290,11 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
               </label>
               <select
                 value={branchId}
+                disabled={Boolean(lockedBranchId)}
                 onChange={(e) => setBranchId(e.target.value)}
-                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
+                className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors disabled:opacity-75"
               >
-                {tenantBranches.map((b) => (
+                {effectiveBranches.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.is_hq ? `${b.name} [HQ]` : b.name}
                   </option>
@@ -324,7 +394,10 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
               <div className="space-y-2">
                 <select
                   value={selectedClientId}
-                  onChange={(e) => setSelectedClientId(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedClientId(e.target.value);
+                    setSelectedExistingAssetId(null);
+                  }}
                   className="w-full rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                 >
                   {tenantClients.map((c) => (
@@ -341,6 +414,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                         key={a.id}
                         type="button"
                         onClick={() => {
+                          setSelectedExistingAssetId(a.id);
                           setCategory(a.category);
                           setBrand(a.brand);
                           setModel(a.model);
@@ -348,11 +422,32 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
                           setPasswordPattern(a.password_pattern ?? '');
                           setCustomAttrs(a.custom_attributes);
                         }}
-                        className="rounded-lg border border-[#3E92CC]/30 bg-[#EBF4FA] px-2.5 py-1 font-medium text-[#0A2463] hover:bg-[#3E92CC]/15 transition-colors"
+                        className={`rounded-lg border px-2.5 py-1 font-medium transition-colors ${
+                          selectedExistingAssetId === a.id
+                            ? 'border-[#1B998B] bg-[#EBF8F6] text-[#157A6E]'
+                            : 'border-[#3E92CC]/30 bg-[#EBF4FA] text-[#0A2463] hover:bg-[#3E92CC]/15'
+                        }`}
                       >
                         Usar {a.brand} {a.model} ({a.serial_imei})
                       </button>
                     ))}
+                    {selectedExistingAssetId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedExistingAssetId(null);
+                          setCategory(getDefaultAssetCategoryForSector(tenant.sector));
+                          setBrand('');
+                          setModel('');
+                          setSerialImei('');
+                          setPasswordPattern('');
+                          setCustomAttrs({});
+                        }}
+                        className="rounded-lg border border-[#D8E4EC] bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:bg-[#F4F6FB]"
+                      >
+                        Registrar como equipo nuevo
+                      </button>
+                    )}
                   </div>
                 )}
               </div>
@@ -443,11 +538,17 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
               />
               <input
                 type="text"
+                list="new-order-tech-list"
                 value={technician}
                 onChange={(e) => setTechnician(e.target.value)}
                 placeholder="Técnico asignado"
                 className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
               />
+              <datalist id="new-order-tech-list">
+                {tenantTechSuggestions.map((name) => (
+                  <option key={name} value={name} />
+                ))}
+              </datalist>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 rounded-xl bg-[#F4F6FB]/75 border border-[#D8E4EC]/70 p-3.5">
