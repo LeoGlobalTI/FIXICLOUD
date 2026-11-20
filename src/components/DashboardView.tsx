@@ -4,7 +4,6 @@ import {
   CalendarClock,
   ChevronDown,
   ChevronRight,
-  Database,
   DatabaseZap,
   FileText,
   FolderKanban,
@@ -32,7 +31,6 @@ import type {
 import {
   ORDER_STATUS_META,
   calculateOrderFinancials,
-  canViewGlobalScope,
   formatCurrency,
   getRolePermissions,
 } from '../utils/erpLogic';
@@ -58,7 +56,6 @@ interface DashboardViewProps {
   onGoToSettings: (tab: 'company' | 'users') => void;
   onGoToMigration: () => void;
   onToggleWhatsApp: () => void;
-  onOpenSupabaseModal: () => void;
 }
 
 
@@ -82,7 +79,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   onGoToSettings,
   onGoToMigration,
   onToggleWhatsApp,
-  onOpenSupabaseModal,
 }) => {
   const [showSplitMenu, setShowSplitMenu] = useState(false);
   const [openRowMenuId, setOpenRowMenuId] = useState<string | null>(null);
@@ -135,7 +131,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   const perms = getRolePermissions(activeRole);
   const canManageAdminArea = perms.canEditSettings || activeRole === 'superadmin';
-  const canOpenSupabaseConfig = canViewGlobalScope(activeRole, authSession?.role);
 
   const successRate =
     scopedOrders.length > 0
@@ -669,29 +664,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                     />
                   </button>
                 </div>
-
-                {canOpenSupabaseConfig && (
-                  <button
-                    type="button"
-                    onClick={onOpenSupabaseModal}
-                    className="w-full px-6 py-4 flex items-center justify-between gap-3 text-left hover:bg-[#F4F6FB]/70 transition-colors"
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[#F4F6FB] text-[#0A2463] border border-[#D8E4EC]">
-                        <Database className="h-4 w-4" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="text-sm font-semibold text-slate-900">
-                          Avanzado &amp; BD Supabase
-                        </div>
-                        <div className="text-xs text-slate-500 truncate">
-                          Credenciales, Seed DB y Health Check
-                        </div>
-                      </div>
-                    </div>
-                    <ChevronRight className="h-4 w-4 text-slate-400 shrink-0" />
-                  </button>
-                )}
 
                 <button
                   type="button"

@@ -47,19 +47,14 @@ const SettingsBranchesView = lazy(() =>
     default: m.SettingsBranchesView,
   }))
 );
-const SupabaseModal = lazy(() =>
-  import('./components/SupabaseModal').then((m) => ({ default: m.SupabaseModal }))
-);
 import {
   getSyncedSeedTenantsForUrl,
   loadAuthSession,
   loadErpState,
   loadSupabaseConfig,
   markSeedTenantsSyncedForUrl,
-  resetErpState,
   saveAuthSession,
   saveErpState,
-  saveSupabaseConfig,
 } from './services/storageService';
 import {
   deleteAppUserFromSupabase,
@@ -128,7 +123,7 @@ export default function App() {
     setErpState(next);
     return next;
   };
-  const [supabaseConfig, setSupabaseConfig] = useState<SupabaseConfig>(() =>
+  const [supabaseConfig] = useState<SupabaseConfig>(() =>
     loadSupabaseConfig()
   );
   const [authSession, setAuthSession] = useState<AuthSessionUser | null>(() =>
@@ -169,7 +164,6 @@ export default function App() {
     trackingCode: string;
   } | null>(null);
   const [printOrderId, setPrintOrderId] = useState<string | null>(null);
-  const [showSupabaseModal, setShowSupabaseModal] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -185,10 +179,6 @@ export default function App() {
   useEffect(() => {
     saveErpState(erpState, { stripCredentials: isSupabaseLive(supabaseConfig) });
   }, [erpState, supabaseConfig]);
-
-  useEffect(() => {
-    saveSupabaseConfig(supabaseConfig);
-  }, [supabaseConfig]);
 
   useEffect(() => {
     saveAuthSession(authSession);
@@ -919,51 +909,30 @@ export default function App() {
 
   if (!authSession) {
     return (
-      <>
-        <LoginScreen
-          supabaseConfig={supabaseConfig}
-          appUsers={erpState.appUsers}
-          tenants={erpState.tenants}
-          branches={erpState.branches}
-          onAuthSuccess={(user: AuthSessionUser) => {
-            setErpState((prev) => ({
-              ...prev,
-              tenants:
-                user.tenant && !prev.tenants.some((t) => t.id === user.tenant!.id)
-                  ? [...prev.tenants, user.tenant]
-                  : prev.tenants,
-              branches:
-                user.branch && !prev.branches.some((b) => b.id === user.branch!.id)
-                  ? [...prev.branches, user.branch]
-                  : prev.branches,
-            }));
-            setAuthSession(user);
-            if (user.tenant_id) setActiveTenantId(user.tenant_id);
-            setActiveBranchId(user.branch_id ?? 'ALL');
-            setActiveRole(user.role);
-            setSelectedOrderId(null);
-          }}
-          onOpenSupabaseModal={() => setShowSupabaseModal(true)}
-        />
-
-        {showSupabaseModal && (
-          <Suspense fallback={null}>
-            <SupabaseModal
-              config={supabaseConfig}
-              onSaveConfig={setSupabaseConfig}
-              onSyncFromSupabase={handleSyncFromSupabase}
-              onResetDemoData={() => {
-                const fresh = resetErpState();
-                setErpState(fresh);
-                setActiveTenantId(fresh.tenants[0].id);
-                setActiveBranchId('ALL');
-                setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
-              }}
-              onClose={() => setShowSupabaseModal(false)}
-            />
-          </Suspense>
-        )}
-      </>
+      <LoginScreen
+        supabaseConfig={supabaseConfig}
+        appUsers={erpState.appUsers}
+        tenants={erpState.tenants}
+        branches={erpState.branches}
+        onAuthSuccess={(user: AuthSessionUser) => {
+          setErpState((prev) => ({
+            ...prev,
+            tenants:
+              user.tenant && !prev.tenants.some((t) => t.id === user.tenant!.id)
+                ? [...prev.tenants, user.tenant]
+                : prev.tenants,
+            branches:
+              user.branch && !prev.branches.some((b) => b.id === user.branch!.id)
+                ? [...prev.branches, user.branch]
+                : prev.branches,
+          }));
+          setAuthSession(user);
+          if (user.tenant_id) setActiveTenantId(user.tenant_id);
+          setActiveBranchId(user.branch_id ?? 'ALL');
+          setActiveRole(user.role);
+          setSelectedOrderId(null);
+        }}
+      />
     );
   }
 
@@ -1054,7 +1023,6 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0">
         <ContextHeader
           activeSection={activeSection}
-          activeRole={activeRole}
           branches={erpState.branches}
           activeTenantId={activeTenant.id}
           activeBranchId={activeBranchId}
@@ -1065,8 +1033,6 @@ export default function App() {
             setGlobalSearch(q);
             navigateSection('console');
           }}
-          supabaseConfig={supabaseConfig}
-          onOpenSupabaseModal={() => setShowSupabaseModal(true)}
           authSession={authSession}
           onOpenAuthModal={() => setShowAuthModal(true)}
           lowStockItems={lowStockItems}
@@ -1125,7 +1091,6 @@ export default function App() {
                   whatsapp_enabled: !activeTenant.whatsapp_enabled,
                 })
               }
-              onOpenSupabaseModal={() => setShowSupabaseModal(true)}
             />
           )}
 
@@ -1304,29 +1269,12 @@ export default function App() {
           />
         )}
 
-        {showSupabaseModal && allowGlobalScope && (
-          <SupabaseModal
-            config={supabaseConfig}
-            onSaveConfig={setSupabaseConfig}
-            onSyncFromSupabase={handleSyncFromSupabase}
-            onResetDemoData={() => {
-              const fresh = resetErpState();
-              setErpState(fresh);
-              setActiveTenantId(fresh.tenants[0].id);
-              setActiveBranchId('ALL');
-              setSelectedOrderId(fresh.workOrders[0]?.id ?? null);
-            }}
-            onClose={() => setShowSupabaseModal(false)}
-          />
-        )}
-
         {showAuthModal && (
           <AuthModal
             supabaseConfig={supabaseConfig}
             appUsers={erpState.appUsers}
             tenants={erpState.tenants}
             branches={erpState.branches}
-            currentUserRole={authSession?.role}
             onAuthSuccess={(user) => {
               setErpState((prev) => ({
                 ...prev,

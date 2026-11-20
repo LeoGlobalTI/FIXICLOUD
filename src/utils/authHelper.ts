@@ -40,6 +40,19 @@ export async function authenticateUser(params: {
   );
 
   if (!matched) {
+    if (params.supabaseConfig.lastError) {
+      return {
+        ok: false,
+        error: params.supabaseConfig.lastError,
+      };
+    }
+    if (params.supabaseConfig.source === 'none') {
+      return {
+        ok: false,
+        error:
+          'Este entorno no tiene configuradas las variables VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY para validar cuentas de Supabase.',
+      };
+    }
     return {
       ok: false,
       error:

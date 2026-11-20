@@ -5,38 +5,34 @@ import { hasLegacyNonUuidIds } from '../utils/supabaseMappers';
 import { isValidUUID } from '../utils/uuid';
 
 const ERP_STATE_KEY = 'fixicloud_erp_state_v1';
-const SUPABASE_CFG_KEY = 'fixicloud_supabase_cfg_v1';
 const AUTH_SESSION_KEY = 'fixicloud_auth_session_v1';
 
-function getEnvSupabaseCredentials(): { url: string; anonKey: string } {
-  const env = (import.meta as unknown as { env?: Record<string, string | undefined> })?.env;
-  return {
-    url: (env?.VITE_SUPABASE_URL ?? '').trim(),
-    anonKey: (env?.VITE_SUPABASE_ANON_KEY ?? '').trim(),
-  };
-}
+function getEnvSupabaseCredentials(): {
+  url: string;
+  anonKey: string;
+  hasSecretKeyMistake: boolean;
+} {
+  const url =
+    typeof import.meta.env !== 'undefined'
+      ? (import.meta.env.VITE_SUPABASE_URL ?? '')
+      : '';
+  const rawAnon =
+    typeof import.meta.env !== 'undefined'
+      ? String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
+      : '';
+  const rawPublishable =
+    typeof import.meta.env !== 'undefined'
+      ? String(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? '').trim()
+      : '';
 
-export function clearLegacyNonUuidStorage(): boolean {
-  try {
-    const raw = localStorage.getItem(ERP_STATE_KEY);
-    if (!raw) return false;
-    const parsed = JSON.parse(raw) as ErpState;
-    if (hasLegacyNonUuidIds(parsed)) {
-      localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
-      const sessRaw = localStorage.getItem(AUTH_SESSION_KEY);
-      if (sessRaw) {
-        const sess = JSON.parse(sessRaw) as AuthSessionUser;
-        if ((sess.tenant_id && !isValidUUID(sess.tenant_id)) || (sess.branch_id && !isValidUUID(sess.branch_id))) {
-          localStorage.removeItem(AUTH_SESSION_KEY);
-        }
-      }
-      return true;
-    }
-  } catch {
-    localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
-    return true;
-  }
-  return false;
+  const isSecretAnon = rawAnon.startsWith('sb_secret_');
+  const safeAnon = !isSecretAnon && rawAnon ? rawAnon : rawPublishable;
+
+  return {
+    url: String(url).trim(),
+    anonKey: safeAnon.startsWith('sb_secret_') ? '' : safeAnon,
+    hasSecretKeyMistake: isSecretAnon && !rawPublishable,
+  };
 }
 
 export function loadErpState(): ErpState {
@@ -84,44 +80,8 @@ export function saveErpState(
   }
 }
 
-export function resetErpState(): ErpState {
-  try {
-    localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
-  } catch {
-    // Ignore
-  }
-  return SEED_ERP_STATE;
-}
-
 export function loadSupabaseConfig(): SupabaseConfig {
   const envCreds = getEnvSupabaseCredentials();
-  try {
-    const raw = localStorage.getItem(SUPABASE_CFG_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as SupabaseConfig;
-      if (envCreds.url && envCreds.anonKey && !parsed.url) {
-        return {
-          url: envCreds.url,
-          anonKey: envCreds.anonKey,
-          connected: !parsed.demoMode,
-          demoMode: Boolean(parsed.demoMode),
-          source: 'env',
-        };
-      }
-      return {
-        ...parsed,
-        source:
-          envCreds.url && envCreds.anonKey && parsed.url === envCreds.url
-            ? 'env'
-            : parsed.url
-            ? 'local'
-            : 'none',
-      };
-    }
-  } catch {
-    // Fallback below
-  }
-
   if (envCreds.url && envCreds.anonKey) {
     return {
       url: envCreds.url,
@@ -133,20 +93,15 @@ export function loadSupabaseConfig(): SupabaseConfig {
   }
 
   return {
-    url: '',
+    url: envCreds.url,
     anonKey: '',
     connected: false,
     demoMode: true,
     source: 'none',
+    lastError: envCreds.hasSecretKeyMistake
+      ? 'La variable VITE_SUPABASE_ANON_KEY tiene una clave secreta (sb_secret_...). Reemplázala por la clave pública (sb_publishable_...) en las variables de entorno.'
+      : undefined,
   };
-}
-
-export function saveSupabaseConfig(cfg: SupabaseConfig): void {
-  try {
-    localStorage.setItem(SUPABASE_CFG_KEY, JSON.stringify(cfg));
-  } catch {
-    // Ignore
-  }
 }
 
 export function loadAuthSession(): AuthSessionUser | null {

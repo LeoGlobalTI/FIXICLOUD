@@ -2113,7 +2113,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             type="url"
                             value={photoUrlInput}
                             onChange={(e) => setPhotoUrlInput(e.target.value)}
-                            placeholder="Pegar URL de imagen o subir archivo local..."
+                            placeholder="Pegar URL de imagen o subir fotografía..."
                             className="flex-1 min-w-[180px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                           />
                           <button

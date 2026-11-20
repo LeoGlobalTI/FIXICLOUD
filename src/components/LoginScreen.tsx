@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Database, KeyRound, LogIn, ShieldCheck, User } from 'lucide-react';
+import { KeyRound, LogIn, User } from 'lucide-react';
 import type {
   AppUser,
   AuthSessionUser,
@@ -7,7 +7,6 @@ import type {
   SupabaseConfig,
   Tenant,
 } from '../types/erp';
-import { isSupabaseLive } from '../services/supabaseService';
 import { authenticateUser } from '../utils/authHelper';
 import { AlertBanner } from './ui/AlertBanner';
 
@@ -17,7 +16,6 @@ interface LoginScreenProps {
   tenants: Tenant[];
   branches: Branch[];
   onAuthSuccess: (user: AuthSessionUser) => void;
-  onOpenSupabaseModal: () => void;
 }
 
 export const LoginScreen: React.FC<LoginScreenProps> = ({
@@ -26,14 +24,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   tenants,
   branches,
   onAuthSuccess,
-  onOpenSupabaseModal,
 }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  const liveMode = isSupabaseLive(supabaseConfig);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,12 +83,6 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           <p className="text-xs text-[#D8E4EC]/80">
             Cloud Technical Service &amp; Repair FixiCloud
           </p>
-          <div className="pt-2">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-[11px] font-medium text-[#D8E4EC]">
-              <ShieldCheck className="h-3.5 w-3.5 text-[#6EE7D8]" />
-              {liveMode ? 'Conectado a Supabase' : 'Modo Demo Local (Seguridad Activa)'}
-            </span>
-          </div>
         </div>
 
         {/* Login Form Body */}
@@ -158,21 +147,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             >
               <LogIn className="h-4 w-4" />
               <span>
-                {loading ? 'Verificando credenciales...' : 'Ingresar a FIXICLOUD'}
+                {loading ? 'Verificando credenciales...' : 'Ingresar a FixiCloud'}
               </span>
             </button>
           </form>
-
-          <div className="border-t border-[#D8E4EC] pt-4 text-center">
-            <button
-              type="button"
-              onClick={onOpenSupabaseModal}
-              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#0A2463] hover:underline"
-            >
-              <Database className="h-3.5 w-3.5 text-[#3E92CC]" />
-              <span>Configurar Conexión Base de Datos Supabase</span>
-            </button>
-          </div>
         </div>
       </div>
 

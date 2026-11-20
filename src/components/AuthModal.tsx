@@ -8,7 +8,6 @@ import type {
   SupabaseConfig,
   Tenant,
 } from '../types/erp';
-import { isSupabaseLive } from '../services/supabaseService';
 import { authenticateUser } from '../utils/authHelper';
 import { AlertBanner } from './ui/AlertBanner';
 
@@ -17,7 +16,6 @@ interface AuthModalProps {
   appUsers: AppUser[];
   tenants: Tenant[];
   branches: Branch[];
-  currentUserRole?: RoleType | null;
   onAuthSuccess: (user: AuthSessionUser) => void;
   onClose: () => void;
 }
@@ -27,7 +25,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   appUsers,
   tenants,
   branches,
-  currentUserRole = null,
   onAuthSuccess,
   onClose,
 }) => {
@@ -35,10 +32,6 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  const liveMode = isSupabaseLive(supabaseConfig);
-  const canShowDemoQuickChips =
-    !liveMode && (!currentUserRole || currentUserRole === 'superadmin');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,12 +67,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             <ShieldCheck className="h-5 w-5 text-[#3E92CC]" />
             <div>
               <h2 id="auth-modal-title" className="text-sm font-semibold">
-                Iniciar Sesión — FIXICLOUD
+                Iniciar Sesión — FixiCloud
               </h2>
               <p className="text-[11px] text-[#D8E4EC]/80">
-                {liveMode
-                  ? 'Autenticación directa contra public.app_users en Supabase'
-                  : 'Modo Demo Local activo (usuarios locales de prueba)'}
+                Autenticación de usuarios en Supabase
               </p>
             </div>
           </div>
@@ -154,50 +145,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             >
               <LogIn className="h-4 w-4" />
               <span>
-                {loading ? 'Verificando credenciales...' : 'Ingresar a FIXICLOUD'}
+                {loading ? 'Verificando credenciales...' : 'Ingresar a FixiCloud'}
               </span>
             </button>
           </form>
-
-          {canShowDemoQuickChips &&
-            appUsers.some(
-              (u) =>
-                u.is_active &&
-                u.role !== 'superadmin' &&
-                u.pin_or_password.trim().length > 0
-            ) && (
-              <div className="border-t border-[#D8E4EC] pt-3.5">
-                <div className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC] p-3 space-y-1.5">
-                  <div className="text-[11px] font-semibold text-slate-600">
-                    Usuarios Demo disponibles (clic para usar usuario):
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {appUsers
-                      .filter(
-                        (u) =>
-                          u.is_active &&
-                          u.role !== 'superadmin' &&
-                          u.pin_or_password.trim().length > 0
-                      )
-                      .slice(0, 5)
-                      .map((u) => (
-                        <button
-                          key={u.id}
-                          type="button"
-                          onClick={() => {
-                            setUsername(u.username);
-                            setPassword('');
-                            setErrorMsg(null);
-                          }}
-                          className="rounded-lg border border-[#D8E4EC] bg-white hover:border-[#3E92CC] px-2 py-1 text-[11px] font-mono text-slate-700 transition-colors"
-                        >
-                          @{u.username}
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            )}
         </div>
       </div>
     </div>

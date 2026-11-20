@@ -4,7 +4,6 @@ import {
   Bell,
   Calendar,
   CheckCircle2,
-  Database,
   LogIn,
   MapPin,
   Menu,
@@ -18,15 +17,11 @@ import type {
   Branch,
   CatalogItem,
   NavSection,
-  RoleType,
-  SupabaseConfig,
   WorkOrder,
 } from '../types/erp';
-import { canViewGlobalScope } from '../utils/erpLogic';
 
 interface ContextHeaderProps {
   activeSection: NavSection;
-  activeRole: RoleType;
   branches: Branch[];
   activeTenantId: string;
   activeBranchId: string;
@@ -34,8 +29,6 @@ interface ContextHeaderProps {
   globalSearch: string;
   onGlobalSearchChange: (q: string) => void;
   onSubmitGlobalSearch: (q: string) => void;
-  supabaseConfig: SupabaseConfig;
-  onOpenSupabaseModal: () => void;
   authSession: AuthSessionUser | null;
   onOpenAuthModal: () => void;
   lowStockItems: CatalogItem[];
@@ -58,7 +51,6 @@ const SECTION_TITLES: Record<NavSection, string> = {
 
 export const ContextHeader: React.FC<ContextHeaderProps> = ({
   activeSection,
-  activeRole,
   branches,
   activeTenantId,
   activeBranchId,
@@ -66,8 +58,6 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
   globalSearch,
   onGlobalSearchChange,
   onSubmitGlobalSearch,
-  supabaseConfig,
-  onOpenSupabaseModal,
   authSession,
   onOpenAuthModal,
   lowStockItems,
@@ -77,7 +67,6 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
   onOpenMobileMenu,
 }) => {
   const [showAlerts, setShowAlerts] = useState(false);
-  const canOpenSupabaseConfig = canViewGlobalScope(activeRole, authSession?.role);
 
   const tenantBranches = branches.filter((b) => b.tenant_id === activeTenantId);
   const isBranchLockedBySession = Boolean(
@@ -88,7 +77,6 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
     : tenantBranches;
   const totalAlerts =
     lowStockItems.length + readyOrders.length + scheduledAppointments.length;
-  const isLive = supabaseConfig.connected && !supabaseConfig.demoMode;
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -298,39 +286,6 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
               {authSession ? `@${authSession.username}` : 'Iniciar Sesión'}
             </span>
           </button>
-
-          {/* Supabase / Demo Status Pill */}
-          {canOpenSupabaseConfig ? (
-            <button
-              type="button"
-              onClick={onOpenSupabaseModal}
-              aria-label={isLive ? 'Supabase Live' : 'Demo Local'}
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 sm:px-3 py-1.5 text-xs font-semibold transition-colors whitespace-nowrap shrink-0 ${
-                isLive
-                  ? 'bg-[#EBF8F6] border-[#1B998B]/40 text-[#1B998B] hover:bg-[#1B998B]/15'
-                  : 'bg-[#EBF4FA] border-[#D8E4EC] text-[#0A2463] hover:bg-[#D8E4EC]/50'
-              }`}
-            >
-              <Database className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline">
-                {isLive ? 'Supabase Live' : 'Demo Local'}
-              </span>
-            </button>
-          ) : (
-            <span
-              title="Estado de base de datos"
-              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 sm:px-3 py-1.5 text-xs font-semibold whitespace-nowrap shrink-0 ${
-                isLive
-                  ? 'bg-[#EBF8F6] border-[#1B998B]/40 text-[#1B998B]'
-                  : 'bg-[#EBF4FA] border-[#D8E4EC] text-[#0A2463]'
-              }`}
-            >
-              <Database className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline">
-                {isLive ? 'Supabase Live' : 'Demo Local'}
-              </span>
-            </span>
-          )}
         </div>
       </div>
     </header>

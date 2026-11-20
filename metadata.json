@@ -1,6 +1,6 @@
 {
   "name": "FIXICLOUD",
-  "description": "Plataforma SaaS Multiempresa y Multi-Sucursal para la gestión integral de talleres de servicio técnico y reparaciones.",
+  "description": "Plataforma SaaS para la gestión integral de talleres de servicio técnico y reparaciones.",
   "requestFramePermissions": [],
   "majorCapabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"

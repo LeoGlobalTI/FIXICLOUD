@@ -209,7 +209,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
 
     setProgress(55);
 
-    let supabaseStatus = 'Modo Demo Local (guardado en navegador)';
+    let supabaseStatus = 'Sincronizado en FixiCloud';
     if (isSupabaseLive(supabaseConfig)) {
       const storageErrors: string[] = [];
       for (const order of result.createdOrdersList) {
@@ -257,10 +257,10 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
       if (up.ok) {
         supabaseStatus =
           storageErrors.length > 0
-            ? `Sincronizado en Supabase (algunas fotos locales no subieron a Storage: ${storageErrors[0]})`
+            ? `Sincronizado en Supabase (algunas fotos no subieron a Storage: ${storageErrors[0]})`
             : 'Sincronizado vía UPSERT (legacy_mdb_id) y Storage en Supabase';
       } else {
-        supabaseStatus = `Guardado local · Supabase aviso: ${up.error}`;
+        supabaseStatus = `Aviso de sincronización Supabase: ${up.error}`;
       }
     }
 
@@ -620,7 +620,7 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
               className="inline-flex items-center gap-2 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] disabled:opacity-50 text-white px-5 py-2.5 text-xs font-semibold transition-colors"
             >
               <Play className="h-4 w-4" />
-              <span>Ejecutar Migración a FIXICLOUD (Local + Supabase)</span>
+              <span>Ejecutar Migración a FixiCloud (Supabase)</span>
             </button>
           </div>
 

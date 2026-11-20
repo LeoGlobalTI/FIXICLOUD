@@ -19,7 +19,13 @@ import type {
   WorkOrderPhoto,
 } from '../types/erp';
 import { SEED_ERP_STATE } from '../data/seedData';
-import { filterErpStateForTenants, mapDbRoleToRoleType } from '../utils/erpLogic';
+import {
+  buildAuthSessionUserFromRow,
+  findMatchingAppUserRow,
+  normalizeLoginUsername,
+  parseRpcAuthPayload,
+} from '../utils/authParsers';
+import { filterErpStateForTenants } from '../utils/erpLogic';
 import {
   mapAppUserFromDb,
   mapAppUserToDb,
@@ -52,37 +58,6 @@ import {
   stripOptionalBranchColumns,
 } from '../utils/supabaseMappers';
 import { ensureUUID } from '../utils/uuid';
-
-const SUPABASE_TABLES = [
-  'tenants',
-  'branches',
-  'app_users',
-  'clients',
-  'customer_assets',
-  'catalog_items',
-  'loan_assets',
-  'work_orders',
-  'work_order_items',
-  'work_order_photos',
-  'work_order_loans',
-  'work_order_payments',
-  'appointments',
-] as const;
-
-type SupabaseTableName = (typeof SUPABASE_TABLES)[number];
-
-interface TableDiagnostic {
-  table: SupabaseTableName;
-  ok: boolean;
-  count: number;
-  error?: string;
-}
-
-export interface SupabaseTestResult {
-  success: boolean;
-  message: string;
-  tables: TableDiagnostic[];
-}
 
 let cachedClientKey = '';
 let cachedClient: SupabaseClient | null = null;
@@ -137,104 +112,6 @@ function getSupabaseClient(url: string, anonKey: string): SupabaseClient | null 
 
 export function isSupabaseLive(cfg: SupabaseConfig): boolean {
   return Boolean(cfg.connected && !cfg.demoMode && cfg.url.trim() && cfg.anonKey.trim());
-}
-
-export async function testSupabaseConnection(
-  url: string,
-  anonKey: string
-): Promise<SupabaseTestResult> {
-  const baseUrl = normalizeUrl(url);
-  if (!baseUrl || !anonKey.trim()) {
-    return {
-      success: false,
-      message: 'Debes ingresar SUPABASE_URL y SUPABASE_ANON_KEY.',
-      tables: [],
-    };
-  }
-
-  try {
-    const cleanKey = anonKey.trim();
-    const results: TableDiagnostic[] = await Promise.all(
-      SUPABASE_TABLES.map(async (table): Promise<TableDiagnostic> => {
-        try {
-          const res = await fetch(`${baseUrl}/rest/v1/${table}?select=*&limit=1`, {
-            method: 'GET',
-            headers: {
-              apikey: cleanKey,
-              Authorization: `Bearer ${cleanKey}`,
-              Prefer: 'count=exact',
-            },
-          });
-
-          if (!res.ok) {
-            const text = await res.text();
-            return {
-              table,
-              ok: false,
-              count: 0,
-              error: `HTTP ${res.status}: ${text.slice(0, 140)}`,
-            };
-          }
-
-          const range = res.headers.get('content-range');
-          const total =
-            range && range.includes('/') ? Number(range.split('/')[1]) || 0 : 0;
-          return { table, ok: true, count: total };
-        } catch (err) {
-          return {
-            table,
-            ok: false,
-            count: 0,
-            error: err instanceof Error ? err.message : 'Error de red',
-          };
-        }
-      })
-    );
-
-    const coreTables = ['tenants', 'branches', 'work_orders', 'catalog_items'];
-    const coreOk = results
-      .filter((r) => coreTables.includes(r.table))
-      .every((r) => r.ok);
-    const allOk = results.every((r) => r.ok);
-    const anyOk = results.some((r) => r.ok);
-
-    if (allOk) {
-      return {
-        success: true,
-        message: `Conexión verificada contra todas las ${SUPABASE_TABLES.length} tablas de FIXICLOUD en Supabase.`,
-        tables: results,
-      };
-    }
-
-    if (coreOk) {
-      return {
-        success: true,
-        message:
-          'Conexión operativa en tablas principales (revisa las tablas adicionales pendientes en el esquema SQL).',
-        tables: results,
-      };
-    }
-
-    if (anyOk) {
-      return {
-        success: false,
-        message: 'Conexión parcial: ejecuta el SQL Maestro de Fase 3 o revisa políticas RLS.',
-        tables: results,
-      };
-    }
-
-    return {
-      success: false,
-      message: results[0]?.error || 'No se pudo conectar con el proyecto Supabase.',
-      tables: results,
-    };
-  } catch (err) {
-    return {
-      success: false,
-      message: err instanceof Error ? err.message : 'Error inesperado al conectar.',
-      tables: [],
-    };
-  }
 }
 
 export async function pullSupabaseErpState(
@@ -387,8 +264,6 @@ export async function pullSupabaseErpState(
     };
   }
 }
-
-export const ANDESFLEET_TENANT_ID = '33333333-3333-4333-8333-333333333333';
 
 async function upsertErpSubsetToSupabase(
   client: SupabaseClient,
@@ -653,23 +528,6 @@ async function upsertErpSubsetToSupabase(
   };
 }
 
-export async function seedDemoDataToSupabase(
-  url: string,
-  anonKey: string
-): Promise<{ ok: boolean; failedTable?: string; message: string }> {
-  const client = getSupabaseClient(url, anonKey);
-  if (!client) return { ok: false, message: 'Credenciales inválidas.' };
-
-  try {
-    return await upsertErpSubsetToSupabase(client, SEED_ERP_STATE);
-  } catch (err) {
-    return {
-      ok: false,
-      message: err instanceof Error ? err.message : 'Error sembrando datos en Supabase.',
-    };
-  }
-}
-
 export async function seedMissingSeedTenantsToSupabase(
   url: string,
   anonKey: string,
@@ -719,32 +577,6 @@ export async function seedMissingSeedTenantsToSupabase(
         err instanceof Error
           ? err.message
           : 'Error cargando empresas faltantes en Supabase.',
-    };
-  }
-}
-
-export async function seedAndesFleetToSupabase(
-  url: string,
-  anonKey: string
-): Promise<{ ok: boolean; failedTable?: string; message: string }> {
-  const client = getSupabaseClient(url, anonKey);
-  if (!client) return { ok: false, message: 'Credenciales inválidas.' };
-
-  const subset = filterErpStateForTenants(
-    SEED_ERP_STATE,
-    new Set([ANDESFLEET_TENANT_ID]),
-    { includeGlobalAppUsers: false }
-  );
-
-  try {
-    return await upsertErpSubsetToSupabase(client, subset);
-  } catch (err) {
-    return {
-      ok: false,
-      message:
-        err instanceof Error
-          ? err.message
-          : 'Error cargando AndesFleet Rent a Car SpA en Supabase.',
     };
   }
 }
@@ -1115,11 +947,18 @@ export async function loginWithAppUsers(
 ): Promise<{ ok: boolean; user?: AuthSessionUser; error?: string }> {
   const client = getSupabaseClient(cfg.url, cfg.anonKey);
   if (!client) {
-    return { ok: false, error: 'Configura Supabase antes de iniciar sesión.' };
+    return {
+      ok: false,
+      error:
+        'No hay conexión activa a Supabase (faltan VITE_SUPABASE_URL y VITE_SUPABASE_ANON_KEY).',
+    };
   }
 
-  const cleanUser = username.trim().replace(/^@+/, '');
+  const cleanUser = normalizeLoginUsername(username);
   const cleanPass = password.trim();
+  if (!cleanUser || !cleanPass) {
+    return { ok: false, error: 'Ingresa tu usuario y contraseña o PIN.' };
+  }
 
   // Preferred secure path: POST RPC body (never leaks pin_or_password in GET URL query params)
   const rpcRes = await client.rpc('authenticate_app_user', {
@@ -1127,96 +966,64 @@ export async function loginWithAppUsers(
     p_password: cleanPass,
   });
 
-  if (!rpcRes.error) {
-    const raw = (Array.isArray(rpcRes.data) ? rpcRes.data[0] : rpcRes.data) as {
-      user?: Record<string, unknown>;
-      tenant?: Record<string, unknown> | null;
-      branch?: Record<string, unknown> | null;
-    } | null;
-
-    if (!raw?.user) {
-      return {
-        ok: false,
-        error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
-      };
+  if (!rpcRes.error && rpcRes.data != null) {
+    const parsedUser = parseRpcAuthPayload(rpcRes.data, cleanUser);
+    if (parsedUser) {
+      return { ok: true, user: parsedUser };
     }
-
-    return {
-      ok: true,
-      user: {
-        id: String(raw.user.id),
-        username: String(raw.user.username ?? cleanUser),
-        full_name: String(raw.user.full_name ?? raw.user.username ?? 'Usuario'),
-        tenant_id: raw.user.tenant_id != null ? String(raw.user.tenant_id) : null,
-        branch_id: raw.user.branch_id != null ? String(raw.user.branch_id) : null,
-        role: mapDbRoleToRoleType(
-          raw.user.role != null ? String(raw.user.role) : null
-        ),
-        is_active: Boolean(raw.user.is_active ?? true),
-        mode: 'supabase',
-        tenant: raw.tenant ? mapTenantFromDb(raw.tenant) : null,
-        branch: raw.branch ? mapBranchFromDb(raw.branch) : null,
-      },
-    };
   }
 
-  const rpcErrMsg = (rpcRes.error.message ?? '').toLowerCase();
-  const isMissingRpc =
-    rpcRes.error.code === 'PGRST202' ||
-    rpcRes.error.code === '42883' ||
-    rpcErrMsg.includes('authenticate_app_user');
-
-  if (!isMissingRpc) {
-    return {
-      ok: false,
-      error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
-    };
-  }
-
-  // Fallback for older schemas where authenticate_app_user RPC has not been applied yet
+  // Fallback query against public.app_users (also covers RPCs that INNER JOIN tenants
+  // and exclude superadmin rows where tenant_id IS NULL, or older schemas without the RPC).
   const escaped = cleanUser.replace(/[%_\\]/g, '\\$&');
-  const { data, error } = await client
+  let queryRes = await client
     .from('app_users')
     .select(
       'id, tenant_id, branch_id, username, full_name, role, is_active, tenants(*), branches(*)'
     )
-    .ilike('username', escaped)
+    .ilike('username', `%${escaped}%`)
     .eq('pin_or_password', cleanPass)
-    .eq('is_active', true)
-    .limit(5);
+    .neq('is_active', false)
+    .limit(10);
 
-  const candidates = (data ?? []) as Array<Record<string, unknown>>;
-  const matchedRow = candidates.find(
-    (r) => String(r.username ?? '').trim().toLowerCase() === cleanUser.toLowerCase()
-  );
+  if (queryRes.error) {
+    // Retry without PostgREST FK embeds in case tenants/branches relationship or RLS blocks the join
+    const plainRes = await client
+      .from('app_users')
+      .select('id, tenant_id, branch_id, username, full_name, role, is_active')
+      .ilike('username', `%${escaped}%`)
+      .eq('pin_or_password', cleanPass)
+      .neq('is_active', false)
+      .limit(10);
+    queryRes = plainRes as typeof queryRes;
+  }
 
-  if (error || !matchedRow) {
+  if (queryRes.error) {
+    return {
+      ok: false,
+      error: `Error autenticando en Supabase (${queryRes.error.message}).`,
+    };
+  }
+
+  const candidates = (queryRes.data ?? []) as Array<Record<string, unknown>>;
+  const matchedRow = findMatchingAppUserRow(candidates, cleanUser);
+
+  if (!matchedRow) {
     return {
       ok: false,
       error: 'Usuario o contraseña/PIN incorrectos, o cuenta inactiva.',
     };
   }
 
-  const rawTenant = matchedRow.tenants as Record<string, unknown> | null | undefined;
-  const rawBranch = matchedRow.branches as Record<string, unknown> | null | undefined;
+  const authUser = buildAuthSessionUserFromRow(matchedRow, cleanUser);
+  if (!authUser) {
+    return {
+      ok: false,
+      error: 'La cuenta se encuentra inactiva o incompleta.',
+    };
+  }
 
-  return {
-    ok: true,
-    user: {
-      id: String(matchedRow.id),
-      username: String(matchedRow.username ?? cleanUser),
-      full_name: String(matchedRow.full_name ?? matchedRow.username ?? 'Usuario'),
-      tenant_id: matchedRow.tenant_id != null ? String(matchedRow.tenant_id) : null,
-      branch_id: matchedRow.branch_id != null ? String(matchedRow.branch_id) : null,
-      role: mapDbRoleToRoleType(
-        matchedRow.role != null ? String(matchedRow.role) : null
-      ),
-      is_active: Boolean(matchedRow.is_active ?? true),
-      mode: 'supabase',
-      tenant: rawTenant ? mapTenantFromDb(rawTenant) : null,
-      branch: rawBranch ? mapBranchFromDb(rawBranch) : null,
-    },
-  };
+  return { ok: true, user: authUser };
 }
 
 // ---------- RPC get_public_order_status ----------
@@ -1388,344 +1195,3 @@ export async function upsertMigratedDataToSupabase(
     return { ok: false, error: err instanceof Error ? err.message : 'Error de red' };
   }
 }
-
-export const SUPABASE_SCHEMA_SQL = `-- FIXICLOUD Phase 3 Production Schema (UUID + PostgreSQL Exact Columns)
-create extension if not exists "pgcrypto";
-
-create table if not exists public.tenants (
-  id uuid primary key default gen_random_uuid(),
-  name text not null,
-  legal_name text,
-  tax_id text,
-  industry text not null default 'computing',
-  currency text not null default 'CLP',
-  tax_rate numeric not null default 19,
-  logo_url text,
-  order_prefix text not null default 'OT',
-  last_order_number integer not null default 100,
-  terms_and_conditions text,
-  whatsapp_enabled boolean not null default true,
-  is_active boolean not null default true,
-  created_at timestamptz default now()
-);
-
-create table if not exists public.branches (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  name text not null,
-  code text not null,
-  is_headquarters boolean not null default false,
-  address text,
-  city text,
-  phone text,
-  business_hours text,
-  email text,
-  is_active boolean not null default true
-);
-
-alter table public.branches add column if not exists city text;
-alter table public.branches add column if not exists business_hours text;
-
-create unique index if not exists idx_single_hq_per_tenant
-  on public.branches (tenant_id) where (is_headquarters = true);
-
-create table if not exists public.app_users (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid references public.tenants(id) on delete cascade,
-  branch_id uuid references public.branches(id) on delete set null,
-  username text unique not null,
-  pin_or_password text not null,
-  full_name text not null,
-  role text not null default 'technician',
-  is_active boolean not null default true,
-  created_at timestamptz default now()
-);
-
-create table if not exists public.clients (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid references public.branches(id) on delete set null,
-  full_name text not null,
-  tax_id text,
-  phone text,
-  secondary_phone text,
-  email text,
-  address text,
-  city text,
-  notes text,
-  legacy_mdb_id text
-);
-
-create table if not exists public.customer_assets (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  client_id uuid not null references public.clients(id) on delete cascade,
-  asset_category text not null default 'Equipo',
-  brand text,
-  model text,
-  serial_number text,
-  unlock_credentials text,
-  custom_attributes jsonb default '{}'::jsonb,
-  legacy_mdb_id text
-);
-
-create table if not exists public.catalog_items (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete cascade,
-  sku text,
-  name text not null,
-  description text,
-  type text not null default 'part',
-  cost_price numeric not null default 0,
-  sale_price numeric not null default 0,
-  stock_quantity integer not null default 0,
-  min_stock integer not null default 1,
-  track_inventory boolean not null default true,
-  is_active boolean not null default true
-);
-
-create table if not exists public.loan_assets (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete cascade,
-  internal_code text not null,
-  name text not null,
-  serial_number text,
-  accessories_included text,
-  value_amount numeric not null default 0,
-  status text not null default 'available',
-  notes text
-);
-
-create table if not exists public.work_orders (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete restrict,
-  order_number integer not null default 100,
-  folio text not null,
-  tracking_code text not null,
-  client_id uuid not null references public.clients(id),
-  asset_id uuid not null references public.customer_assets(id),
-  modality text not null default 'workshop',
-  service_address text,
-  status text not null default 'received',
-  priority text not null default 'normal',
-  accessories_received text,
-  physical_condition_notes text,
-  reported_symptoms text,
-  technical_diagnosis text,
-  work_performed text,
-  parts_and_observations text,
-  internal_notes text,
-  apply_tax boolean not null default true,
-  tax_rate numeric not null default 19,
-  subtotal_amount numeric not null default 0,
-  discount_amount numeric not null default 0,
-  tax_amount numeric not null default 0,
-  total_amount numeric not null default 0,
-  paid_amount numeric not null default 0,
-  balance_due numeric generated always as (total_amount - paid_amount) stored,
-  warranty_days integer default 90,
-  received_at timestamptz default now(),
-  promised_at timestamptz
-);
-
-create table if not exists public.work_order_items (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  work_order_id uuid not null references public.work_orders(id) on delete cascade,
-  catalog_item_id uuid references public.catalog_items(id),
-  item_type text not null default 'custom',
-  description text not null,
-  quantity integer not null default 1,
-  unit_price numeric not null default 0,
-  total_price numeric generated always as (quantity * unit_price) stored,
-  deducted_from_stock boolean not null default false
-);
-
-create table if not exists public.work_order_photos (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  work_order_id uuid not null references public.work_orders(id) on delete cascade,
-  storage_path text not null default 'demo',
-  public_url text not null,
-  stage text not null default 'diagnosis',
-  caption text,
-  created_at timestamptz default now()
-);
-
-create table if not exists public.work_order_loans (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  work_order_id uuid not null references public.work_orders(id) on delete cascade,
-  loan_asset_id uuid not null references public.loan_assets(id),
-  loaned_at timestamptz default now(),
-  expected_return_at timestamptz,
-  returned_at timestamptz,
-  condition_on_loan text,
-  condition_on_return text,
-  is_active boolean not null default true
-);
-
-create table if not exists public.work_order_payments (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete restrict,
-  work_order_id uuid not null references public.work_orders(id) on delete cascade,
-  receipt_number text,
-  amount numeric not null default 0,
-  payment_method text not null default 'transfer',
-  notes text,
-  paid_at timestamptz default now()
-);
-
-create table if not exists public.appointments (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references public.tenants(id) on delete cascade,
-  branch_id uuid not null references public.branches(id) on delete cascade,
-  client_id uuid not null references public.clients(id),
-  work_order_id uuid references public.work_orders(id),
-  subject text not null,
-  description text,
-  scheduled_start timestamptz not null,
-  scheduled_end timestamptz not null,
-  modality text not null default 'workshop',
-  address text,
-  status text not null default 'scheduled',
-  created_at timestamptz default now()
-);
-
--- Storage Bucket público para fotos WebP
-insert into storage.buckets (id, name, public)
-values ('order-photos', 'order-photos', true)
-on conflict (id) do nothing;
-
--- RPC Onboarding de nueva empresa
-create or replace function register_new_tenant(
-  p_user_id uuid,
-  p_full_name text,
-  p_email text,
-  p_company_name text,
-  p_tax_id text,
-  p_sector text,
-  p_hq_name text
-) returns jsonb language plpgsql security definer as $$
-declare
-  v_tenant_id uuid := gen_random_uuid();
-  v_branch_id uuid := gen_random_uuid();
-begin
-  insert into public.tenants (id, name, legal_name, tax_id, industry, order_prefix)
-  values (v_tenant_id, p_company_name, p_company_name, p_tax_id, p_sector, upper(left(p_company_name, 2)));
-
-  insert into public.branches (id, tenant_id, name, code, is_headquarters)
-  values (v_branch_id, v_tenant_id, p_hq_name, 'HQ-01', true);
-
-  return jsonb_build_object('tenant_id', v_tenant_id, 'branch_id', v_branch_id);
-end;
-$$;
-
--- RPC Portal Público (/track y ?track=CODIGO)
-create or replace function get_public_order_status(p_code text)
-returns jsonb language plpgsql security definer as $$
-declare
-  v_order public.work_orders%rowtype;
-  v_tenant public.tenants%rowtype;
-  v_branch public.branches%rowtype;
-  v_client public.clients%rowtype;
-  v_asset public.customer_assets%rowtype;
-begin
-  select * into v_order
-  from public.work_orders
-  where upper(tracking_code) = upper(trim(p_code))
-     or upper(folio) = upper(trim(p_code))
-  limit 1;
-
-  if not found then
-    return null;
-  end if;
-
-  select * into v_tenant from public.tenants where id = v_order.tenant_id;
-  select * into v_branch from public.branches where id = v_order.branch_id;
-  select * into v_client from public.clients where id = v_order.client_id;
-  select * into v_asset from public.customer_assets where id = v_order.asset_id;
-
-  return jsonb_build_object(
-    'order', to_jsonb(v_order),
-    'tenant', to_jsonb(v_tenant),
-    'branch', to_jsonb(v_branch),
-    'client', to_jsonb(v_client),
-    'asset', to_jsonb(v_asset),
-    'items', coalesce((select jsonb_agg(i) from public.work_order_items i where i.work_order_id = v_order.id), '[]'::jsonb),
-    'payments', coalesce((select jsonb_agg(p) from public.work_order_payments p where p.work_order_id = v_order.id), '[]'::jsonb),
-    'photos', coalesce((select jsonb_agg(ph) from public.work_order_photos ph where ph.work_order_id = v_order.id), '[]'::jsonb)
-  );
-end;
-$$;
-
--- RPC Autenticación segura sin exponer pin_or_password en URL query params
-create or replace function authenticate_app_user(p_username text, p_password text)
-returns jsonb language plpgsql security definer as $$
-declare
-  v_user public.app_users%rowtype;
-  v_tenant public.tenants%rowtype;
-  v_branch public.branches%rowtype;
-begin
-  select * into v_user
-  from public.app_users
-  where lower(trim(username)) = lower(trim(p_username))
-    and pin_or_password = trim(p_password)
-    and is_active = true
-  limit 1;
-
-  if not found then
-    return null;
-  end if;
-
-  if v_user.tenant_id is not null then
-    select * into v_tenant from public.tenants where id = v_user.tenant_id;
-  end if;
-  if v_user.branch_id is not null then
-    select * into v_branch from public.branches where id = v_user.branch_id;
-  end if;
-
-  return jsonb_build_object(
-    'user', jsonb_build_object(
-      'id', v_user.id,
-      'tenant_id', v_user.tenant_id,
-      'branch_id', v_user.branch_id,
-      'username', v_user.username,
-      'full_name', v_user.full_name,
-      'role', v_user.role,
-      'is_active', v_user.is_active
-    ),
-    'tenant', case when v_user.tenant_id is not null then to_jsonb(v_tenant) else null end,
-    'branch', case when v_user.branch_id is not null then to_jsonb(v_branch) else null end
-  );
-end;
-$$;
-
--- Nota de endurecimiento RLS para producción (activar tras configurar JWT claims / Edge Function):
--- alter table public.tenants enable row level security;
--- alter table public.branches enable row level security;
--- alter table public.app_users enable row level security;
--- alter table public.clients enable row level security;
--- alter table public.customer_assets enable row level security;
--- alter table public.catalog_items enable row level security;
--- alter table public.loan_assets enable row level security;
--- alter table public.work_orders enable row level security;
--- alter table public.work_order_items enable row level security;
--- alter table public.work_order_photos enable row level security;
--- alter table public.work_order_loans enable row level security;
--- alter table public.work_order_payments enable row level security;
--- alter table public.appointments enable row level security;
-
--- Seed Usuarios de Pruebas (GlobalTi y Maquinarias del Sur) - Perfil gtitech intocable
-insert into public.app_users (id, tenant_id, branch_id, username, pin_or_password, full_name, role, is_active)
-values
-  ('11111111-1111-4111-8111-111111110199', '11111111-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111101', 'test_tech_global', '1234', 'Técnico Pruebas GlobalTi', 'technician', true),
-  ('11111111-1111-4111-8111-111111110198', '11111111-1111-4111-8111-111111111111', '11111111-1111-4111-8111-111111111101', 'test_recep_global', '1234', 'Recepcionista Pruebas GlobalTi', 'receptionist', true),
-  ('22222222-2222-4222-8222-222222220199', '22222222-2222-4222-8222-222222222222', '22222222-2222-4222-8222-222222222201', 'test_tech_sur', '1234', 'Técnico Pruebas Maquinarias Sur', 'technician', true),
-  ('22222222-2222-4222-8222-222222220198', '22222222-2222-4222-8222-222222222222', '22222222-2222-4222-8222-222222220201', 'test_recep_sur', '1234', 'Recepcionista Pruebas Maquinarias Sur', 'receptionist', true)
-on conflict (username) do nothing;
-`;
