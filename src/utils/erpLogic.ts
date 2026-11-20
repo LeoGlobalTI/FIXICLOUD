@@ -880,3 +880,17 @@ export function sanitizeOrderUpdateForRole(
       : existing.visit_scheduled_at,
   };
 }
+
+export function generateUniqueUsername(
+  baseUsername: string,
+  existingUsernames: Set<string>
+): string {
+  const cleanBase = baseUsername.trim().toLowerCase().replace(/^@+/, '') || 'user';
+  let candidate = cleanBase;
+  let suffix = 1;
+  while (existingUsernames.has(candidate)) {
+    candidate = `${cleanBase}${suffix++}`;
+  }
+  existingUsernames.add(candidate);
+  return candidate;
+}

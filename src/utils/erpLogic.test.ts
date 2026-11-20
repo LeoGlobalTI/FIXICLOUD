@@ -10,6 +10,7 @@ import {
   filterVisibleAppUsers,
   filterWorkOrders,
   generateNextFolio,
+  generateUniqueUsername,
   getDefaultAssetCategoryForSector,
   getDefaultTenantTechnicianName,
   getRolePermissions,
@@ -765,6 +766,10 @@ test('technician RBAC blocks stock edits, delivery status, photo deletion, and l
   assert.equal(recAllowedStatus.status, 'delivered');
 });
 
-
-
-
+test('generateUniqueUsername prevents collisions when creating companies with matching prefixes', () => {
+  const existing = new Set(['admin_glo', 'admin_glo1', 'tec_glo']);
+  assert.equal(generateUniqueUsername('admin_glo', existing), 'admin_glo2');
+  assert.equal(generateUniqueUsername('admin_glo', existing), 'admin_glo3');
+  assert.equal(generateUniqueUsername(' @TEC_glo ', existing), 'tec_glo1');
+  assert.equal(generateUniqueUsername('recep_glo', existing), 'recep_glo');
+});

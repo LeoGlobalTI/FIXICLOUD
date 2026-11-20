@@ -10,7 +10,6 @@ import {
   Plus,
   Search,
   Trash2,
-  UserPlus,
   Users,
   X,
 } from 'lucide-react';
@@ -302,97 +301,6 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     setUBranchId('');
     setShowNewUser(false);
     setCreatedUserInfo({ fullName: cleanName, username: cleanUsername });
-  };
-
-  const handleGenerateStandardUsers = async () => {
-    setUserError(null);
-    setUserSuccessMsg(null);
-    const prefix = tenant.name.slice(0, 3).toLowerCase().replace(/[^a-z]/g, '') || 'emp';
-    const hq = tenantBranches.find((b) => b.is_hq) || tenantBranches[0];
-    const hqId = hq ? hq.id : null;
-
-    const existingUsernames = new Set(appUsers.map((u) => u.username.toLowerCase()));
-    const existingRolesInTenant = new Set(
-      appUsers.filter((u) => u.tenant_id === tenant.id).map((u) => u.role)
-    );
-
-    const created: string[] = [];
-
-    if (!existingRolesInTenant.has('admin')) {
-      let uname = `admin_${prefix}`;
-      let i = 1;
-      while (existingUsernames.has(uname)) {
-        uname = `admin_${prefix}${i++}`;
-      }
-      existingUsernames.add(uname);
-      const user: AppUser = {
-        id: generateUUID(),
-        tenant_id: tenant.id,
-        branch_id: null,
-        username: uname,
-        pin_or_password: '123456',
-        full_name: `Administrador ${tenant.name}`,
-        role: 'admin',
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-      const res = await onAddAppUser(user);
-      if (res.ok) created.push(user.username);
-    }
-
-    if (!existingRolesInTenant.has('technician')) {
-      let uname = `tec_${prefix}`;
-      let i = 1;
-      while (existingUsernames.has(uname)) {
-        uname = `tec_${prefix}${i++}`;
-      }
-      existingUsernames.add(uname);
-      const user: AppUser = {
-        id: generateUUID(),
-        tenant_id: tenant.id,
-        branch_id: hqId,
-        username: uname,
-        pin_or_password: '1234',
-        full_name: `Técnico ${tenant.name}`,
-        role: 'technician',
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-      const res = await onAddAppUser(user);
-      if (res.ok) created.push(user.username);
-    }
-
-    if (!existingRolesInTenant.has('receptionist')) {
-      let uname = `recep_${prefix}`;
-      let i = 1;
-      while (existingUsernames.has(uname)) {
-        uname = `recep_${prefix}${i++}`;
-      }
-      existingUsernames.add(uname);
-      const user: AppUser = {
-        id: generateUUID(),
-        tenant_id: tenant.id,
-        branch_id: hqId,
-        username: uname,
-        pin_or_password: '1234',
-        full_name: `Recepción ${tenant.name}`,
-        role: 'receptionist',
-        is_active: true,
-        created_at: new Date().toISOString(),
-      };
-      const res = await onAddAppUser(user);
-      if (res.ok) created.push(user.username);
-    }
-
-    if (created.length > 0) {
-      setUserSuccessMsg(
-        `Se crearon los usuarios estándar (${created.map((u) => '@' + u).join(', ')}) para ${tenant.name}, tal como en AndesFleet.`
-      );
-    } else {
-      setUserSuccessMsg(
-        `La empresa ${tenant.name} ya cuenta con sus usuarios estándar (Admin, Técnico y Recepcionista).`
-      );
-    }
   };
 
   const handlePatchUser = async (
@@ -1144,14 +1052,6 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
               )}
               {perms.canManageUsers && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleGenerateStandardUsers}
-                    className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
-                  >
-                    <UserPlus className="h-3.5 w-3.5" />
-                    <span>Generar Usuarios Estándar (AndesFleet)</span>
-                  </button>
                   <button
                     type="button"
                     onClick={() => {

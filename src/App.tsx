@@ -72,6 +72,7 @@ import {
   syncCatalogItemToSupabase,
   syncClientToSupabase,
   syncLoanAssetToSupabase,
+  syncNewTenantBundleToSupabase,
   syncTenantToSupabase,
   syncWorkOrderToSupabase,
 } from './services/supabaseService';
@@ -95,6 +96,7 @@ import type {
 import {
   canDeleteBranchSafely,
   canViewGlobalScope,
+  generateUniqueUsername,
   getRolePermissions,
   getVisibleTenantsForScope,
   sanitizeOrderUpdateForRole,
@@ -380,11 +382,14 @@ export default function App() {
       business_hours: 'Lun-Vie 09:00 - 18:30',
     };
 
+    const existingUsernames = new Set(
+      erpStateRef.current.appUsers.map((u) => u.username.trim().toLowerCase())
+    );
     const defaultAdmin: AppUser = {
       id: generateUUID(),
       tenant_id: tenantId,
       branch_id: null,
-      username: `admin_${prefix}`,
+      username: generateUniqueUsername(`admin_${prefix}`, existingUsernames),
       pin_or_password: '123456',
       full_name: `Administrador ${input.name}`,
       role: 'admin',
@@ -395,7 +400,7 @@ export default function App() {
       id: generateUUID(),
       tenant_id: tenantId,
       branch_id: branchId,
-      username: `tec_${prefix}`,
+      username: generateUniqueUsername(`tec_${prefix}`, existingUsernames),
       pin_or_password: '1234',
       full_name: `Técnico ${input.name}`,
       role: 'technician',
@@ -406,7 +411,7 @@ export default function App() {
       id: generateUUID(),
       tenant_id: tenantId,
       branch_id: branchId,
-      username: `recep_${prefix}`,
+      username: generateUniqueUsername(`recep_${prefix}`, existingUsernames),
       pin_or_password: '1234',
       full_name: `Recepción ${input.name}`,
       role: 'receptionist',
@@ -414,17 +419,19 @@ export default function App() {
       created_at: new Date().toISOString(),
     };
 
-    setErpState((prev) => ({
+    commitErpState((prev) => ({
       ...prev,
       tenants: [...prev.tenants, newTenant],
       branches: [...prev.branches, hqBranch],
       appUsers: [defaultAdmin, defaultTech, defaultRecep, ...prev.appUsers],
     }));
-    trackSync(syncTenantToSupabase(supabaseConfig, newTenant));
-    trackSync(syncBranchToSupabase(supabaseConfig, hqBranch));
-    trackSync(syncAppUserToSupabase(supabaseConfig, defaultAdmin, { isNew: true }));
-    trackSync(syncAppUserToSupabase(supabaseConfig, defaultTech, { isNew: true }));
-    trackSync(syncAppUserToSupabase(supabaseConfig, defaultRecep, { isNew: true }));
+    trackSync(
+      syncNewTenantBundleToSupabase(supabaseConfig, {
+        tenant: newTenant,
+        branch: hqBranch,
+        users: [defaultAdmin, defaultTech, defaultRecep],
+      })
+    );
 
     setActiveTenantId(tenantId);
     setActiveBranchId('ALL');
@@ -632,27 +639,36 @@ export default function App() {
           )
         : prev.appointments,
     }));
-    if (payload.newClient) {
-      trackSync(syncClientToSupabase(supabaseConfig, payload.newClient));
-    }
-    if (payload.newAsset) {
-      trackSync(syncAssetToSupabase(supabaseConfig, payload.newAsset));
-    }
     const orderTenant = nextState.tenants.find((t) => t.id === payload.order.tenant_id);
     trackSync(
-      syncWorkOrderToSupabase(
-        supabaseConfig,
-        payload.order,
-        orderTenant?.iva_rate ?? 19,
-        nextState.catalogItems
-      )
+      (async () => {
+        if (payload.newClient) {
+          const clientRes = await syncClientToSupabase(supabaseConfig, payload.newClient);
+          if (!clientRes.ok) return clientRes;
+        }
+        if (payload.newAsset) {
+          const assetRes = await syncAssetToSupabase(supabaseConfig, payload.newAsset);
+          if (!assetRes.ok) return assetRes;
+        }
+        const orderRes = await syncWorkOrderToSupabase(
+          supabaseConfig,
+          payload.order,
+          orderTenant?.iva_rate ?? 19,
+          nextState.catalogItems
+        );
+        if (!orderRes.ok) return orderRes;
+
+        if (payload.sourceAppointmentId) {
+          const src = nextState.appointments.find(
+            (a) => a.id === payload.sourceAppointmentId
+          );
+          if (src) {
+            return syncAppointmentToSupabase(supabaseConfig, src);
+          }
+        }
+        return { ok: true };
+      })()
     );
-    if (payload.sourceAppointmentId) {
-      const src = nextState.appointments.find((a) => a.id === payload.sourceAppointmentId);
-      if (src) {
-        trackSync(syncAppointmentToSupabase(supabaseConfig, src));
-      }
-    }
     setSelectedOrderId(payload.order.id);
     setShowNewOrderModal(false);
     setOrderPrefill(null);
@@ -821,14 +837,20 @@ export default function App() {
       workOrders: prev.workOrders.map((o) => (o.id === orderId ? nextOrder : o)),
     }));
     const orderTenant = nextState.tenants.find((t) => t.id === targetOrder.tenant_id);
-    trackSync(syncLoanAssetToSupabase(supabaseConfig, { ...asset, status: 'loaned' }));
     trackSync(
-      syncWorkOrderToSupabase(
-        supabaseConfig,
-        nextOrder,
-        orderTenant?.iva_rate ?? 19,
-        nextState.catalogItems
-      )
+      (async () => {
+        const loanRes = await syncLoanAssetToSupabase(supabaseConfig, {
+          ...asset,
+          status: 'loaned',
+        });
+        if (!loanRes.ok) return loanRes;
+        return syncWorkOrderToSupabase(
+          supabaseConfig,
+          nextOrder,
+          orderTenant?.iva_rate ?? 19,
+          nextState.catalogItems
+        );
+      })()
     );
   };
 
@@ -854,19 +876,23 @@ export default function App() {
       ),
       workOrders: prev.workOrders.map((o) => (o.id === orderId ? nextOrder : o)),
     }));
-    if (loanAsset) {
-      trackSync(
-        syncLoanAssetToSupabase(supabaseConfig, { ...loanAsset, status: 'available' })
-      );
-    }
     const orderTenant = nextState.tenants.find((t) => t.id === order.tenant_id);
     trackSync(
-      syncWorkOrderToSupabase(
-        supabaseConfig,
-        nextOrder,
-        orderTenant?.iva_rate ?? 19,
-        nextState.catalogItems
-      )
+      (async () => {
+        if (loanAsset) {
+          const loanRes = await syncLoanAssetToSupabase(supabaseConfig, {
+            ...loanAsset,
+            status: 'available',
+          });
+          if (!loanRes.ok) return loanRes;
+        }
+        return syncWorkOrderToSupabase(
+          supabaseConfig,
+          nextOrder,
+          orderTenant?.iva_rate ?? 19,
+          nextState.catalogItems
+        );
+      })()
     );
   };
 

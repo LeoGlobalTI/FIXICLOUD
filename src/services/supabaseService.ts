@@ -630,6 +630,29 @@ export async function deleteBranchFromSupabase(
   return { ok: true };
 }
 
+export async function syncNewTenantBundleToSupabase(
+  cfg: SupabaseConfig,
+  bundle: {
+    tenant: Tenant;
+    branch: Branch;
+    users: AppUser[];
+  }
+): Promise<{ ok: boolean; error?: string }> {
+  const tenantRes = await syncTenantToSupabase(cfg, bundle.tenant);
+  if (!tenantRes.ok) return tenantRes;
+
+  const branchRes = await syncBranchToSupabase(cfg, bundle.branch);
+  if (!branchRes.ok) return branchRes;
+
+  const userResults = await Promise.all(
+    bundle.users.map((user) => syncAppUserToSupabase(cfg, user, { isNew: true }))
+  );
+  const failedUser = userResults.find((r) => !r.ok);
+  if (failedUser) return failedUser;
+
+  return { ok: true };
+}
+
 export async function syncAppUserToSupabase(
   cfg: SupabaseConfig,
   user: AppUser,
