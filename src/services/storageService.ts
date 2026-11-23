@@ -17,6 +17,12 @@ export const EMPTY_ERP_STATE: ErpState = {
   appointments: [],
 };
 
+function sanitizeEnvVar(value: unknown): string {
+  return String(value ?? '')
+    .trim()
+    .replace(/^["']|["']$/g, '');
+}
+
 function getEnvSupabaseCredentials(): {
   url: string;
   anonKey: string;
@@ -24,22 +30,22 @@ function getEnvSupabaseCredentials(): {
 } {
   const url =
     typeof import.meta.env !== 'undefined'
-      ? (import.meta.env.VITE_SUPABASE_URL ?? '')
+      ? sanitizeEnvVar(import.meta.env.VITE_SUPABASE_URL)
       : '';
   const rawAnon =
     typeof import.meta.env !== 'undefined'
-      ? String(import.meta.env.VITE_SUPABASE_ANON_KEY ?? '').trim()
+      ? sanitizeEnvVar(import.meta.env.VITE_SUPABASE_ANON_KEY)
       : '';
   const rawPublishable =
     typeof import.meta.env !== 'undefined'
-      ? String(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ?? '').trim()
+      ? sanitizeEnvVar(import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY)
       : '';
 
   const isSecretAnon = rawAnon.startsWith('sb_secret_');
   const safeAnon = !isSecretAnon && rawAnon ? rawAnon : rawPublishable;
 
   return {
-    url: String(url).trim(),
+    url,
     anonKey: safeAnon.startsWith('sb_secret_') ? '' : safeAnon,
     hasSecretKeyMistake: isSecretAnon && !rawPublishable,
   };

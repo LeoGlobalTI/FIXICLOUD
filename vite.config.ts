@@ -1,11 +1,39 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import {defineConfig} from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 
-export default defineConfig(() => {
+const sanitizeEnvValue = (value?: string): string =>
+  (value ?? '').trim().replace(/^["']|["']$/g, '');
+
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const supabaseUrl = sanitizeEnvValue(env.VITE_SUPABASE_URL || env.SUPABASE_URL);
+  const rawPublishable = sanitizeEnvValue(
+    env.VITE_SUPABASE_PUBLISHABLE_KEY || env.SUPABASE_PUBLISHABLE_KEY
+  );
+  const rawAnon = sanitizeEnvValue(
+    env.VITE_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY || rawPublishable
+  );
+  const safePublishable = rawPublishable.startsWith('sb_secret_') ? '' : rawPublishable;
+  const safeAnon = rawAnon.startsWith('sb_secret_') ? safePublishable : rawAnon;
+
   return {
     plugins: [react(), tailwindcss()],
+    define: {
+      ...(supabaseUrl
+        ? { 'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(supabaseUrl) }
+        : {}),
+      ...(safeAnon
+        ? { 'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(safeAnon) }
+        : {}),
+      ...(safePublishable
+        ? {
+            'import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY':
+              JSON.stringify(safePublishable),
+          }
+        : {}),
+    },
     resolve: {
       alias: {
         '@': path.resolve(import.meta.dirname, '.'),
