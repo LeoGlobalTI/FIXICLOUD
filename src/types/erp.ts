@@ -67,6 +67,7 @@ export interface Tenant {
   email: string;
   warranty_days?: number;
   legal_terms?: string;
+  logo_url?: string | null;
   created_at: string;
 }
 
@@ -79,6 +80,7 @@ export interface Branch {
   address: string;
   city: string;
   phone: string;
+  email?: string;
   business_hours: string;
 }
 
@@ -194,6 +196,7 @@ export interface WorkOrder {
   loan?: WorkOrderLoan;
   warranty_days?: number;
   legacy_mdb_id?: string;
+  delivered_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -237,7 +240,7 @@ export interface AuthSessionUser {
   branch_id: string | null;
   role: RoleType;
   is_active: boolean;
-  mode: 'supabase' | 'demo';
+  mode: 'supabase';
   tenant?: Tenant | null;
   branch?: Branch | null;
 }
@@ -246,10 +249,53 @@ export interface SupabaseConfig {
   url: string;
   anonKey: string;
   connected: boolean;
-  demoMode?: boolean;
   source?: 'env' | 'local' | 'none';
   lastCheckedAt?: string;
   lastError?: string;
+}
+
+export interface PublicOrderTrackItem {
+  description: string;
+  quantity: number;
+  total: number;
+}
+
+export interface PublicOrderTrackPhoto {
+  id: string;
+  url: string;
+  stage: PhotoStage;
+  caption: string;
+}
+
+export interface PublicOrderTrackData {
+  folio: string;
+  tracking_code: string;
+  status: OrderStatus;
+  modality: ServiceModality;
+  company_name: string;
+  company_logo?: string | null;
+  currency: string;
+  branch_name: string;
+  branch_address?: string;
+  branch_phone?: string;
+  client_name: string;
+  asset_category: string;
+  brand: string;
+  model: string;
+  serial_number: string;
+  accessories_received: string;
+  reported_symptoms: string;
+  technical_diagnosis: string;
+  work_performed: string;
+  parts_and_observations: string;
+  items: PublicOrderTrackItem[];
+  total_amount: number;
+  paid_amount: number;
+  balance_due: number;
+  photos: PublicOrderTrackPhoto[];
+  received_at?: string;
+  promised_at?: string | null;
+  delivered_at?: string | null;
 }
 
 export interface ErpState {

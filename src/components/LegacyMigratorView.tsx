@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Database,
   FileSpreadsheet,
   FolderUp,
   ImagePlus,
@@ -18,7 +17,6 @@ import { compressImageToWebP } from '../utils/imageCompression';
 import {
   type LegacyMdbRecord,
   type LegacyPhotoUpload,
-  SIMULATED_MDB_RECORDS,
   buildMigrationPreview,
   executeLegacyMigration,
   parseLegacyCsv,
@@ -76,10 +74,11 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
   const [binarySample, setBinarySample] = useState<string[]>([]);
   const [isBinaryScan, setIsBinaryScan] = useState(false);
   const [importSourceType, setImportSourceType] = useState<
-    'csv' | 'json' | 'mdb_scan' | 'simulation' | null
+    'csv' | 'json' | 'mdb_scan' | null
   >(null);
   const [uploadedPhotos, setUploadedPhotos] = useState<LegacyPhotoUpload[]>([]);
 
+  const [importError, setImportError] = useState<string | null>(null);
   const [migrating, setMigrating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [migrationReport, setMigrationReport] = useState<{
@@ -107,11 +106,24 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
   const handleFileInput = async (file: File) => {
     const ext = file.name.toLowerCase();
     setMigrationReport(null);
+    setImportError(null);
     setSourceLabel(file.name);
 
     if (ext.endsWith('.csv')) {
       const text = await file.text();
       const parsed = parseLegacyCsv(text);
+      if (parsed.length === 0) {
+        setRawRecords([]);
+        setDetectedTables([]);
+        setBinarySample([]);
+        setIsBinaryScan(false);
+        setImportSourceType('csv');
+        setStep(1);
+        setImportError(
+          `El archivo "${file.name}" no contiene filas válidas para importar. Verifica que incluya encabezados y al menos un registro.`
+        );
+        return;
+      }
       setRawRecords(parsed);
       setDetectedTables(['CSV Export']);
       setBinarySample([]);
@@ -121,8 +133,30 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
     } else if (ext.endsWith('.json')) {
       const text = await file.text();
       try {
-        const json = JSON.parse(text) as LegacyMdbRecord[];
-        setRawRecords(Array.isArray(json) ? json : []);
+        const json = JSON.parse(text) as unknown;
+        if (!Array.isArray(json)) {
+          setRawRecords([]);
+          setImportSourceType('json');
+          setStep(1);
+          setImportError(
+            `El archivo JSON "${file.name}" debe contener un arreglo ([...]) de registros.`
+          );
+          return;
+        }
+        const validRows = json.filter(
+          (row): row is LegacyMdbRecord =>
+            Boolean(row && typeof row === 'object' && !Array.isArray(row))
+        );
+        if (validRows.length === 0) {
+          setRawRecords([]);
+          setImportSourceType('json');
+          setStep(1);
+          setImportError(
+            `El archivo JSON "${file.name}" no contiene objetos de registro válidos.`
+          );
+          return;
+        }
+        setRawRecords(validRows);
         setDetectedTables(['JSON Export']);
         setBinarySample([]);
         setIsBinaryScan(false);
@@ -131,6 +165,10 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
       } catch {
         setRawRecords([]);
         setImportSourceType('json');
+        setStep(1);
+        setImportError(
+          `No se pudo leer "${file.name}": el JSON tiene errores de sintaxis.`
+        );
       }
     } else {
       // Binary .mdb scan
@@ -143,17 +181,6 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
       setImportSourceType('mdb_scan');
       setStep(2);
     }
-  };
-
-  const handleLoadSimulation = () => {
-    setMigrationReport(null);
-    setSourceLabel('TallerLegacy.mdb (Dataset Simulación Legacy)');
-    setDetectedTables(['Reparaciones', 'Clientes', 'Agenda']);
-    setBinarySample(['Standard Jet DB', 'Reparaciones', 'Clientes', 'IdOrden', 'Sintomas']);
-    setRawRecords(SIMULATED_MDB_RECORDS);
-    setIsBinaryScan(true);
-    setImportSourceType('simulation');
-    setStep(2);
   };
 
   const handleLegacyPhotosUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -312,6 +339,15 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
         ))}
       </div>
 
+      {importError && (
+        <AlertBanner
+          variant="error"
+          title="Archivo de importación inválido"
+          message={importError}
+          onDismiss={() => setImportError(null)}
+        />
+      )}
+
       {/* Step 1 */}
       {step === 1 && (
         <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-5">
@@ -381,15 +417,6 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
                   className="hidden"
                 />
               </label>
-
-              <button
-                type="button"
-                onClick={handleLoadSimulation}
-                className="inline-flex items-center gap-2 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-4 py-2.5 text-xs font-semibold transition-colors"
-              >
-                <Database className="h-4 w-4" />
-                <span>Cargar Dataset de Simulación Legacy (.mdb)</span>
-              </button>
             </div>
           </div>
         </section>
@@ -421,20 +448,11 @@ export const LegacyMigratorView: React.FC<LegacyMigratorViewProps> = ({
             </button>
           </div>
 
-          {(importSourceType === 'simulation' ||
-            (importSourceType === 'mdb_scan' && isBinaryScan)) && (
+          {importSourceType === 'mdb_scan' && isBinaryScan && (
             <AlertBanner
               variant="warning"
-              title={
-                importSourceType === 'simulation'
-                  ? 'Dataset de Simulación Legacy Activo'
-                  : 'Escáner binario .mdb en navegador (vista previa / respaldo)'
-              }
-              message={
-                importSourceType === 'simulation'
-                  ? 'Estás previsualizando registros simulados de demostración. Para migrar datos reales de producción desde MS Access, exporta tus tablas a .csv o .json e impórtalas en el Paso 1.'
-                  : 'El escáner en navegador inspecciona cabeceras Jet y cadenas .mdb y usa registros de respaldo si Access está cifrado o comprimido. Para migrar el 100% de registros reales desde MS Access, exporta las tablas a .csv o .json.'
-              }
+              title="Escáner binario .mdb en navegador"
+              message="El escáner inspecciona cabeceras Jet y nombres de tablas dentro del archivo .mdb (retorna 0 filas si está empaquetado en formato binario propietario). Para migrar el 100% de tus registros desde Microsoft Access, exporta las tablas a .csv o .json e impórtalas en el Paso 1."
             />
           )}
 

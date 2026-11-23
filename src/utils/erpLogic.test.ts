@@ -3,28 +3,45 @@ import assert from 'node:assert/strict';
 import {
   buildPublicTrackUrl,
   calculateOrderFinancials,
+  calculateWorkshopCapacity,
   canDeductCatalogStock,
   canDeleteBranchSafely,
+  canDeleteCatalogItemSafely,
+  canDeleteClientSafely,
+  canDeleteCustomerAssetSafely,
+  canDeleteLoanAssetSafely,
+  canDeleteWorkOrderSafely,
   canViewGlobalScope,
-  filterErpStateForTenants,
+  filterLowStockCatalogItems,
   filterVisibleAppUsers,
   filterWorkOrders,
   generateNextFolio,
-  generateUniqueUsername,
   getDefaultAssetCategoryForSector,
   getDefaultTenantTechnicianName,
+  getLocalIsoDate,
   getRolePermissions,
   getVisibleTenantsForScope,
+  hasActiveUnreturnedLoan,
   interpolateWhatsAppTemplate,
+  isSafeImageUrl,
   mapDbRoleToRoleType,
   mapRoleTypeToDbRole,
-  mergeMissingSeedTenants,
   normalizePhoneForWhatsApp,
   prepareAppUserUpdate,
   sanitizeOrderUpdateForRole,
   searchFilterAppUsers,
 } from './erpLogic';
-import type { AppUser, Branch, Client, CustomerAsset, ErpState, Tenant, WorkOrder } from '../types/erp';
+import type {
+  AppUser,
+  Branch,
+  CatalogItem,
+  Client,
+  CustomerAsset,
+  ErpState,
+  LoanAsset,
+  Tenant,
+  WorkOrder,
+} from '../types/erp';
 
 const mockTenant: Tenant = {
   id: 't1',
@@ -420,133 +437,96 @@ test('prepareAppUserUpdate enforces self-protection, uniqueness, role-tenant int
   assert.equal(searchFilterAppUsers(users, '', 'ALL', 'inactive').length, 0);
 });
 
-test('mergeMissingSeedTenants backfills newly seeded fleet tenant and its fleet records without overwriting existing tenants', () => {
-  const andesId = '33333333-3333-4333-8333-333333333333';
-  const fleetTenant: Tenant = {
-    ...mockTenant,
-    id: andesId,
-    name: 'AndesFleet Rent a Car SpA',
-    sector: 'automotive',
-    folio_prefix: 'FL',
-  };
-  const seedFixture: ErpState = {
-    tenants: [mockTenant, fleetTenant],
-    branches: [
-      mockBranch,
-      {
-        ...mockBranch,
-        id: '33333333-3333-4333-8333-333333333301',
-        tenant_id: andesId,
-        name: 'Base Central Aeropuerto Pudahuel',
-        code: 'HQ-SCL',
-      },
-    ],
-    appUsers: [
-      {
-        id: '33333333-3333-4333-8333-333333330111',
-        tenant_id: andesId,
-        branch_id: null,
-        username: 'patricio',
-        pin_or_password: '123456',
-        full_name: 'Patricio Morales',
-        role: 'admin',
-        is_active: true,
-        created_at: '2026-03-01T09:00:00Z',
-      },
-    ],
-    clients: [
-      mockClient,
-      {
-        ...mockClient,
-        id: '33333333-3333-4333-8333-333333330207',
-        tenant_id: andesId,
-        name: 'Minera Atacama Norte SpA',
-      },
-    ],
-    assets: [
-      mockAsset,
-      {
-        ...mockAsset,
-        id: '33333333-3333-4333-8333-333333330307',
-        tenant_id: andesId,
-        client_id: '33333333-3333-4333-8333-333333330207',
-        category: 'Camioneta 4x4',
-        brand: 'Toyota',
-        model: 'Hilux DX',
-      },
-    ],
-    catalogItems: [],
-    loanAssets: [
-      {
-        id: '33333333-3333-4333-8333-333333330505',
-        tenant_id: andesId,
-        branch_id: '33333333-3333-4333-8333-333333333301',
-        code: 'FLOTA-01',
-        name: 'Camioneta 4x4 Toyota Hilux DX',
-        brand_model: 'Toyota Hilux 2.4 TD 4x4',
-        serial_number: 'TDKL-48',
-        status: 'available',
-        condition_notes: 'Operativa',
-      },
-    ],
-    workOrders: [
-      mockOrder,
-      {
-        ...mockOrder,
-        id: '33333333-3333-4333-8333-333333330604',
-        tenant_id: andesId,
-        branch_id: '33333333-3333-4333-8333-333333333301',
-        folio: 'FL-000104',
-        client_id: '33333333-3333-4333-8333-333333330207',
-        asset_id: '33333333-3333-4333-8333-333333330307',
-      },
-    ],
-    appointments: [],
-  };
+test('isSafeImageUrl, hasActiveUnreturnedLoan, and calculateWorkshopCapacity behave accurately', () => {
+  assert.equal(isSafeImageUrl('https://cdn.fixicloud.cl/foto.webp'), true);
+  assert.equal(isSafeImageUrl('http://localhost:3000/img.png'), true);
+  assert.equal(isSafeImageUrl('data:image/webp;base64,UklGRg=='), true);
+  assert.equal(isSafeImageUrl('javascript:alert(1)'), false);
+  assert.equal(isSafeImageUrl('file:///etc/passwd'), false);
+  assert.equal(isSafeImageUrl('   '), false);
 
-  const legacyStored: ErpState = {
-    tenants: [{ ...mockTenant, name: 'GlobalTech Custom' }],
-    branches: [mockBranch],
-    appUsers: [],
-    clients: [mockClient],
-    assets: [mockAsset],
-    catalogItems: [],
-    loanAssets: [],
-    workOrders: [mockOrder],
-    appointments: [],
-  };
-
-  const merged = mergeMissingSeedTenants(legacyStored, seedFixture);
-  assert.equal(merged.changed, true);
+  assert.equal(hasActiveUnreturnedLoan({ loan: undefined }), false);
   assert.equal(
-    merged.state.tenants.find((t) => t.id === mockTenant.id)?.name,
-    'GlobalTech Custom'
+    hasActiveUnreturnedLoan({
+      loan: {
+        id: 'l1',
+        loan_asset_id: 'la1',
+        asset_code: 'PR-01',
+        asset_name: 'Laptop',
+        loaned_at: '2026-11-10T10:00:00Z',
+        delivery_notes: '',
+      },
+    }),
+    true
   );
-  const andesTenant = merged.state.tenants.find((t) => t.id === andesId);
-  assert.ok(andesTenant);
-  assert.equal(andesTenant.sector, 'automotive');
-  assert.equal(merged.state.loanAssets.filter((l) => l.tenant_id === andesId).length, 1);
-  assert.equal(merged.state.workOrders.filter((w) => w.tenant_id === andesId).length, 1);
-  assert.equal(merged.state.clients.filter((c) => c.tenant_id === andesId).length, 1);
-  assert.equal(merged.state.assets.filter((a) => a.tenant_id === andesId).length, 1);
-  assert.equal(merged.state.appUsers.filter((u) => u.tenant_id === andesId).length, 1);
-
-  const secondPass = mergeMissingSeedTenants(merged.state, seedFixture);
-  assert.equal(secondPass.changed, false);
-
-  const andesSubset = filterErpStateForTenants(
-    merged.state,
-    new Set([andesId]),
-    { includeGlobalAppUsers: false }
+  assert.equal(
+    hasActiveUnreturnedLoan({
+      loan: {
+        id: 'l1',
+        loan_asset_id: 'la1',
+        asset_code: 'PR-01',
+        asset_name: 'Laptop',
+        loaned_at: '2026-11-10T10:00:00Z',
+        returned_at: '2026-11-12T10:00:00Z',
+        delivery_notes: '',
+      },
+    }),
+    false
   );
-  assert.equal(andesSubset.tenants.length, 1);
-  assert.equal(andesSubset.tenants[0].id, andesId);
-  assert.equal(andesSubset.branches.every((b) => b.tenant_id === andesId), true);
-  assert.equal(andesSubset.appUsers.every((u) => u.tenant_id === andesId), true);
-  assert.equal(andesSubset.clients.every((c) => c.tenant_id === andesId), true);
-  assert.equal(andesSubset.assets.every((a) => a.tenant_id === andesId), true);
-  assert.equal(andesSubset.loanAssets.every((l) => l.tenant_id === andesId), true);
-  assert.equal(andesSubset.workOrders.every((w) => w.tenant_id === andesId), true);
+
+  const techUsers: AppUser[] = [
+    {
+      id: 'u-t1',
+      tenant_id: 't1',
+      branch_id: 'b1',
+      username: 'tec1',
+      pin_or_password: 'x',
+      full_name: 'Tec 1',
+      role: 'technician',
+      is_active: true,
+      created_at: '2026-01-01',
+    },
+    {
+      id: 'u-t2',
+      tenant_id: 't1',
+      branch_id: 'b2',
+      username: 'tec2',
+      pin_or_password: 'x',
+      full_name: 'Tec 2',
+      role: 'technician',
+      is_active: true,
+      created_at: '2026-01-01',
+    },
+    {
+      id: 'u-t3-off',
+      tenant_id: 't1',
+      branch_id: 'b1',
+      username: 'tec3',
+      pin_or_password: 'x',
+      full_name: 'Tec 3',
+      role: 'technician',
+      is_active: false,
+      created_at: '2026-01-01',
+    },
+  ];
+  assert.deepEqual(
+    calculateWorkshopCapacity({
+      activeOrdersCount: 3,
+      appUsers: techUsers,
+      tenantId: 't1',
+      branchId: 'b1',
+    }),
+    { activeTechnicians: 1, capacityPct: 100 }
+  );
+  assert.deepEqual(
+    calculateWorkshopCapacity({
+      activeOrdersCount: 3,
+      appUsers: techUsers,
+      tenantId: 't1',
+      branchId: 'ALL',
+    }),
+    { activeTechnicians: 2, capacityPct: 50 }
+  );
 });
 
 test('getDefaultAssetCategoryForSector maps every industry sector cleanly', () => {
@@ -663,17 +643,25 @@ test('canManageClients, canDeleteBranchSafely, and sanitizeOrderUpdateForRole en
   assert.equal(sanitizedTech.assigned_technician, mockOrder.assigned_technician);
   assert.equal(sanitizedTech.modality, mockOrder.modality);
 
-  // Receptionist can update financials/payments/symptoms, but NOT diagnosis
+  // Receptionist can append positive payments and update symptoms, but NOT delete/alter existing payments or diagnosis
   const recAttempt: WorkOrder = {
     ...mockOrder,
     apply_iva: false,
     reported_symptoms: 'Sintoma aclarado en recepcion',
     technical_diagnosis: 'No deberia cambiar',
+    payments: [
+      { id: 'p1', date: '2026-11-10', amount: 1, method: 'cash' },
+      { id: 'p2', date: '2026-11-12', amount: 15000, method: 'transfer' },
+      { id: 'p-bad', date: '2026-11-12', amount: -500, method: 'cash' },
+    ],
   };
   const sanitizedRec = sanitizeOrderUpdateForRole(mockOrder, recAttempt, 'receptionist');
   assert.equal(sanitizedRec.apply_iva, mockOrder.apply_iva);
   assert.equal(sanitizedRec.reported_symptoms, 'Sintoma aclarado en recepcion');
   assert.equal(sanitizedRec.technical_diagnosis, mockOrder.technical_diagnosis);
+  assert.equal(sanitizedRec.payments.length, 2);
+  assert.equal(sanitizedRec.payments[0].amount, 30000);
+  assert.equal(sanitizedRec.payments[1].id, 'p2');
 });
 
 test('calculateOrderFinancials guards against NaN and Infinity numeric inputs', () => {
@@ -764,12 +752,149 @@ test('technician RBAC blocks stock edits, delivery status, photo deletion, and l
     'receptionist'
   );
   assert.equal(recAllowedStatus.status, 'delivered');
+
+  // Receptionist blocked from direct received -> delivered or leaving delivered
+  const recJumpBlocked = sanitizeOrderUpdateForRole(
+    { ...mockOrder, status: 'received' },
+    { ...mockOrder, status: 'delivered' },
+    'receptionist'
+  );
+  assert.equal(recJumpBlocked.status, 'received');
+
+  const recLeaveDeliveredBlocked = sanitizeOrderUpdateForRole(
+    { ...mockOrder, status: 'delivered' },
+    { ...mockOrder, status: 'waiting_approval' },
+    'receptionist'
+  );
+  assert.equal(recLeaveDeliveredBlocked.status, 'delivered');
+
+  // Technician blocked from reopening delivered order
+  const techReopenBlocked = sanitizeOrderUpdateForRole(
+    { ...mockOrder, status: 'delivered' },
+    { ...mockOrder, status: 'in_repair' },
+    'technician'
+  );
+  assert.equal(techReopenBlocked.status, 'delivered');
 });
 
-test('generateUniqueUsername prevents collisions when creating companies with matching prefixes', () => {
-  const existing = new Set(['admin_glo', 'admin_glo1', 'tec_glo']);
-  assert.equal(generateUniqueUsername('admin_glo', existing), 'admin_glo2');
-  assert.equal(generateUniqueUsername('admin_glo', existing), 'admin_glo3');
-  assert.equal(generateUniqueUsername(' @TEC_glo ', existing), 'tec_glo1');
-  assert.equal(generateUniqueUsername('recep_glo', existing), 'recep_glo');
+test('getLocalIsoDate and filterLowStockCatalogItems ignore service rows and respect tenant/branch scope', () => {
+  const sampleDate = new Date(2026, 10, 5, 23, 45, 0);
+  assert.equal(getLocalIsoDate(sampleDate), '2026-11-05');
+
+  const catalog: CatalogItem[] = [
+    {
+      id: 'cat-part-low',
+      tenant_id: 't1',
+      branch_id: 'b1',
+      sku: 'PRT-01',
+      name: 'Pantalla OLED',
+      category: 'part',
+      cost_price: 50000,
+      sale_price: 90000,
+      stock_qty: 2,
+      min_stock: 2,
+    },
+    {
+      id: 'cat-srv-zero',
+      tenant_id: 't1',
+      branch_id: 'b1',
+      sku: 'SRV-01',
+      name: 'Formateo Express',
+      category: 'service',
+      cost_price: 0,
+      sale_price: 25000,
+      stock_qty: 0,
+      min_stock: 0,
+    },
+    {
+      id: 'cat-part-b2',
+      tenant_id: 't1',
+      branch_id: 'b2',
+      sku: 'PRT-02',
+      name: 'Batería',
+      category: 'part',
+      cost_price: 20000,
+      sale_price: 45000,
+      stock_qty: 0,
+      min_stock: 1,
+    },
+  ];
+
+  assert.deepEqual(
+    filterLowStockCatalogItems(catalog, 't1', 'b1').map((i) => i.id),
+    ['cat-part-low']
+  );
+  assert.deepEqual(
+    filterLowStockCatalogItems(catalog, 't1', 'ALL').map((i) => i.id),
+    ['cat-part-low', 'cat-part-b2']
+  );
 });
+
+test('safe delete validators guard catalog items, loan assets, clients, customer assets, and work orders', () => {
+  const catalogOrder: WorkOrder = {
+    ...mockOrder,
+    items: [
+      {
+        id: 'oi-1',
+        source: 'catalog',
+        catalog_item_id: 'cat-ref',
+        description: 'SSD',
+        qty: 1,
+        unit_price: 45000,
+      },
+    ],
+    loan: {
+      id: 'ln-active',
+      loan_asset_id: 'la-1',
+      asset_code: 'PR-01',
+      asset_name: 'Notebook Respaldo',
+      loaned_at: '2026-11-10T10:00:00Z',
+      delivery_notes: '',
+    },
+  };
+
+  assert.equal(canDeleteCatalogItemSafely('cat-ref', [catalogOrder]).ok, false);
+  assert.equal(canDeleteCatalogItemSafely('cat-unused', [catalogOrder]).ok, true);
+
+  const loanUnit: LoanAsset = {
+    id: 'la-1',
+    tenant_id: 't1',
+    branch_id: 'b1',
+    code: 'PR-01',
+    name: 'Notebook Respaldo',
+    brand_model: 'Lenovo',
+    serial_number: 'SN-1',
+    status: 'available',
+    condition_notes: '',
+  };
+  assert.equal(canDeleteLoanAssetSafely(loanUnit, [catalogOrder]).ok, false);
+  assert.equal(
+    canDeleteLoanAssetSafely({ ...loanUnit, status: 'loaned' }, []).ok,
+    false
+  );
+  assert.equal(canDeleteLoanAssetSafely({ ...loanUnit, id: 'la-free' }, []).ok, true);
+
+  assert.equal(
+    canDeleteClientSafely('c1', {
+      workOrders: [mockOrder],
+      assets: [mockAsset],
+      appointments: [],
+    }).ok,
+    false
+  );
+  assert.equal(
+    canDeleteClientSafely('c-clean', {
+      workOrders: [mockOrder],
+      assets: [mockAsset],
+      appointments: [],
+    }).ok,
+    true
+  );
+
+  assert.equal(canDeleteCustomerAssetSafely('a1', [mockOrder]).ok, false);
+  assert.equal(canDeleteCustomerAssetSafely('a-clean', [mockOrder]).ok, true);
+
+  assert.equal(canDeleteWorkOrderSafely(catalogOrder).ok, false);
+  assert.equal(canDeleteWorkOrderSafely(mockOrder).ok, true);
+});
+

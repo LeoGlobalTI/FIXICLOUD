@@ -43,7 +43,6 @@ interface SidebarProps {
   onOpenNewTenant: () => void;
   branches: Branch[];
   activeBranchId: string;
-  onSelectBranch: (branchId: string) => void;
   authSession: AuthSessionUser | null;
   onOpenAuthModal: () => void;
   onSignOut: () => void;
@@ -73,7 +72,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenNewTenant,
   branches,
   activeBranchId,
-  onSelectBranch,
   authSession,
   onOpenAuthModal,
   onSignOut,
@@ -224,7 +222,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   FixiCloud
                 </div>
                 <div className="text-[11px] text-[#D8E4EC]/70 truncate">
-                  Service &amp; Repair FixiCloud
+                  Gestión de Servicio Técnico
                 </div>
               </div>
             )}

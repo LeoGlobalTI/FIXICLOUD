@@ -15,6 +15,8 @@ interface LoginScreenProps {
   appUsers: AppUser[];
   tenants: Tenant[];
   branches: Branch[];
+  initialNotice?: string | null;
+  onDismissNotice?: () => void;
   onAuthSuccess: (user: AuthSessionUser) => void;
 }
 
@@ -23,6 +25,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   appUsers,
   tenants,
   branches,
+  initialNotice,
+  onDismissNotice,
   onAuthSuccess,
 }) => {
   const [username, setUsername] = useState('');
@@ -81,17 +85,20 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             FixiCloud
           </h1>
           <p className="text-xs text-[#D8E4EC]/80">
-            Cloud Technical Service &amp; Repair FixiCloud
+            Gestión de Servicio Técnico en la Nube
           </p>
         </div>
 
         {/* Login Form Body */}
         <div className="p-6 space-y-5">
-          {errorMsg && (
+          {(errorMsg || initialNotice) && (
             <AlertBanner
-              variant="error"
-              message={errorMsg}
-              onDismiss={() => setErrorMsg(null)}
+              variant={errorMsg ? 'error' : 'warning'}
+              message={errorMsg ?? initialNotice ?? ''}
+              onDismiss={() => {
+                if (errorMsg) setErrorMsg(null);
+                else onDismissNotice?.();
+              }}
             />
           )}
 

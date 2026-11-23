@@ -17,13 +17,13 @@ import {
   Wrench,
 } from 'lucide-react';
 import type {
+  AppUser,
   Appointment,
   AuthSessionUser,
   Branch,
   CatalogItem,
   Client,
   CustomerAsset,
-  LoanAsset,
   RoleType,
   Tenant,
   WorkOrder,
@@ -31,6 +31,8 @@ import type {
 import {
   ORDER_STATUS_META,
   calculateOrderFinancials,
+  calculateWorkshopCapacity,
+  filterLowStockCatalogItems,
   formatCurrency,
   getRolePermissions,
 } from '../utils/erpLogic';
@@ -39,6 +41,7 @@ import { getSectorIconMeta } from '../utils/sectorMeta';
 interface DashboardViewProps {
   tenant: Tenant;
   branches: Branch[];
+  appUsers: AppUser[];
   activeBranchId: string;
   activeRole: RoleType;
   authSession: AuthSessionUser | null;
@@ -46,7 +49,6 @@ interface DashboardViewProps {
   clients: Client[];
   assets: CustomerAsset[];
   catalogItems: CatalogItem[];
-  loanAssets: LoanAsset[];
   appointments: Appointment[];
   onOpenOrder: (orderId: string) => void;
   onOpenPrintOrder: (orderId: string) => void;
@@ -63,6 +65,7 @@ interface DashboardViewProps {
 export const DashboardView: React.FC<DashboardViewProps> = ({
   tenant,
   branches,
+  appUsers,
   activeBranchId,
   activeRole,
   authSession,
@@ -125,8 +128,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     [scopedOrders]
   );
   const lowStockCount = useMemo(
-    () => scopedCatalog.filter((c) => c.stock_qty <= c.min_stock).length,
-    [scopedCatalog]
+    () => filterLowStockCatalogItems(scopedCatalog, tenant.id, activeBranchId).length,
+    [scopedCatalog, tenant.id, activeBranchId]
   );
 
   const perms = getRolePermissions(activeRole);
@@ -137,13 +140,13 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       ? Math.round((completedOrReady.length / scopedOrders.length) * 100)
       : 0;
 
-  const uniqueTechs = new Set(
-    activeInWorkshop.map((o) => o.assigned_technician).filter(Boolean)
-  ).size;
-  const workshopCapacityPct =
-    activeInWorkshop.length > 0
-      ? Math.min(100, Math.round((activeInWorkshop.length / Math.max(1, uniqueTechs * 3)) * 100))
-      : 0;
+  const { activeTechnicians: uniqueTechs, capacityPct: workshopCapacityPct } =
+    calculateWorkshopCapacity({
+      activeOrdersCount: activeInWorkshop.length,
+      appUsers,
+      tenantId: tenant.id,
+      branchId: activeBranchId,
+    });
 
   const upcomingDeliveriesCount = readyForPickup.length + scopedAppointments.length;
 
@@ -156,6 +159,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
 
   const firstName = authSession?.full_name?.trim().split(/\s+/)[0] || 'Equipo';
+  const hour = new Date().getHours();
+  const greeting =
+    hour < 12 ? 'Buenos días' : hour < 19 ? 'Buenas tardes' : 'Buenas noches';
 
   const sectorMeta = getSectorIconMeta(tenant.sector);
   const SectorIcon = sectorMeta.Icon;
@@ -166,7 +172,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="font-display text-2xl sm:text-[32px] sm:leading-[40px] font-semibold text-slate-900">
-            Buenos días, {firstName} 👋
+            {greeting}, {firstName}
           </h1>
           <p className="mt-1 text-sm sm:text-base text-slate-600">
             Esto es lo que está pasando en{' '}

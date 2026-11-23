@@ -40,13 +40,14 @@ interface NewOrderModalProps {
   assets: CustomerAsset[];
   existingOrders: WorkOrder[];
   initialPrefill?: NewOrderPrefill | null;
+  onAllocateFolio?: (tenantId: string, prefix: string) => Promise<string>;
   onClose: () => void;
   onCreate: (payload: {
     newClient?: Client;
     newAsset?: CustomerAsset;
     order: WorkOrder;
     sourceAppointmentId?: string;
-  }) => void;
+  }) => Promise<{ ok: boolean; error?: string }> | void;
 }
 
 export const NewOrderModal: React.FC<NewOrderModalProps> = ({
@@ -59,6 +60,7 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   assets,
   existingOrders,
   initialPrefill,
+  onAllocateFolio,
   onClose,
   onCreate,
 }) => {
@@ -134,11 +136,13 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
   );
 
   const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const sectorFields = getSectorCustomFields(tenant.sector);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     setFormError(null);
     if (clientMode === 'new' && !clientName.trim()) {
       setFormError('Ingresa el nombre o razón social del nuevo cliente.');
@@ -200,7 +204,16 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
           custom_attributes: customAttrs,
         };
 
-    const folio = generateNextFolio(tenant.folio_prefix, existingOrders, tenant.id);
+    setSubmitting(true);
+    let folio: string;
+    try {
+      folio = onAllocateFolio
+        ? await onAllocateFolio(tenant.id, tenant.folio_prefix)
+        : generateNextFolio(tenant.folio_prefix, existingOrders, tenant.id);
+    } catch {
+      folio = generateNextFolio(tenant.folio_prefix, existingOrders, tenant.id);
+    }
+
     const safeBranchId = effectiveBranches.some((b) => b.id === branchId)
       ? branchId
       : defaultBranch;
@@ -233,12 +246,16 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
       updated_at: now,
     };
 
-    onCreate({
+    const res = await onCreate({
       newClient: newClientObj,
       newAsset: newAssetObj,
       order,
       sourceAppointmentId: initialPrefill?.sourceAppointmentId,
     });
+    setSubmitting(false);
+    if (res && !res.ok) {
+      setFormError(res.error ?? 'No se pudo guardar la orden en Supabase.');
+    }
   };
 
   const existingClientAssets = assets.filter(
@@ -613,16 +630,18 @@ export const NewOrderModal: React.FC<NewOrderModalProps> = ({
           <div className="flex justify-end gap-2 pt-3 border-t border-[#D8E4EC]">
             <button
               type="button"
+              disabled={submitting}
               onClick={onClose}
-              className="rounded-xl border border-[#D8E4EC] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-[#F4F6FB]"
+              className="rounded-xl border border-[#D8E4EC] px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-[#F4F6FB] disabled:opacity-50"
             >
               Cancelar
             </button>
             <button
               type="submit"
-              className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-5 py-2 text-xs font-semibold text-white transition-colors"
+              disabled={submitting}
+              className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 px-5 py-2 text-xs font-semibold text-white transition-colors"
             >
-              Crear Orden e Ir a Consola
+              {submitting ? 'Creando orden...' : 'Crear Orden e Ir a Consola'}
             </button>
           </div>
         </form>

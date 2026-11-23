@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Camera,
   CheckCircle2,
+  ImageOff,
   MapPin,
   Search,
   Wrench,
@@ -13,10 +14,11 @@ import type {
   Client,
   CustomerAsset,
   OrderStatus,
+  PublicOrderTrackData,
+  PublicOrderTrackPhoto,
   SupabaseConfig,
   Tenant,
   WorkOrder,
-  WorkOrderPhoto,
 } from '../types/erp';
 import {
   ORDER_STATUS_META,
@@ -24,7 +26,6 @@ import {
   formatCurrency,
 } from '../utils/erpLogic';
 import {
-  type PublicOrderRpcPayload,
   fetchPublicOrderStatusViaRpc,
   isSupabaseLive,
 } from '../services/supabaseService';
@@ -37,7 +38,7 @@ interface PublicTrackPortalProps {
   orders: WorkOrder[];
   supabaseConfig: SupabaseConfig;
   initialCode?: string;
-  onBackToErp: () => void;
+  onBackToApp: () => void;
 }
 
 const PROGRESS_STEPS: OrderStatus[] = [
@@ -56,14 +57,15 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
   assets,
   orders,
   supabaseConfig,
-  initialCode = '8F92A1C4',
-  onBackToErp,
+  initialCode = '',
+  onBackToApp,
 }) => {
   const [inputCode, setInputCode] = useState(initialCode);
   const [searchedCode, setSearchedCode] = useState(initialCode);
-  const [lightboxPhoto, setLightboxPhoto] = useState<WorkOrderPhoto | null>(null);
-  const [rpcPayload, setRpcPayload] = useState<PublicOrderRpcPayload | null>(null);
+  const [lightboxPhoto, setLightboxPhoto] = useState<PublicOrderTrackPhoto | null>(null);
+  const [rpcData, setRpcData] = useState<PublicOrderTrackData | null>(null);
   const [rpcLoading, setRpcLoading] = useState(false);
+  const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
 
   const liveMode = isSupabaseLive(supabaseConfig);
 
@@ -74,15 +76,17 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
 
   useEffect(() => {
     let cancelled = false;
+    setFailedPhotoIds({});
+    setLightboxPhoto(null);
     if (!liveMode || !searchedCode.trim()) {
-      setRpcPayload(null);
+      setRpcData(null);
       return;
     }
     setRpcLoading(true);
     fetchPublicOrderStatusViaRpc(supabaseConfig, searchedCode)
       .then((res) => {
         if (cancelled) return;
-        setRpcPayload(res.ok && res.data ? res.data : null);
+        setRpcData(res.ok && res.data ? res.data : null);
       })
       .finally(() => {
         if (!cancelled) setRpcLoading(false);
@@ -99,42 +103,77 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
       o.folio.toUpperCase() === normalized
   );
 
-  const matchedOrder = (liveMode && rpcPayload?.order) ? rpcPayload.order : localMatchedOrder;
-  const tenant = (liveMode && rpcPayload?.tenant)
-    ? rpcPayload.tenant
-    : matchedOrder
-    ? tenants.find((t) => t.id === matchedOrder.tenant_id)
-    : undefined;
-  const branch = (liveMode && rpcPayload?.branch)
-    ? rpcPayload.branch
-    : matchedOrder
-    ? branches.find((b) => b.id === matchedOrder.branch_id)
-    : undefined;
-  const client = (liveMode && rpcPayload?.client)
-    ? rpcPayload.client
-    : matchedOrder
-    ? clients.find((c) => c.id === matchedOrder.client_id)
-    : undefined;
-  const asset = (liveMode && rpcPayload?.asset)
-    ? rpcPayload.asset
-    : matchedOrder
-    ? assets.find((a) => a.id === matchedOrder.asset_id)
-    : undefined;
+  const localFallbackData: PublicOrderTrackData | null = (() => {
+    if (!localMatchedOrder) return null;
+    const tenant = tenants.find((t) => t.id === localMatchedOrder.tenant_id);
+    if (!tenant) return null;
+    const branch = branches.find((b) => b.id === localMatchedOrder.branch_id);
+    const client = clients.find((c) => c.id === localMatchedOrder.client_id);
+    const asset = assets.find((a) => a.id === localMatchedOrder.asset_id);
+    const fin = calculateOrderFinancials(
+      localMatchedOrder.items,
+      localMatchedOrder.discount_amount,
+      localMatchedOrder.apply_iva,
+      tenant.iva_rate,
+      localMatchedOrder.payments
+    );
+    return {
+      folio: localMatchedOrder.folio,
+      tracking_code: localMatchedOrder.tracking_code,
+      status: localMatchedOrder.status,
+      modality: localMatchedOrder.modality,
+      company_name: tenant.name,
+      currency: tenant.currency,
+      branch_name: branch?.name ?? 'Casa Matriz',
+      branch_address: branch?.address,
+      branch_phone: branch?.phone,
+      client_name: client?.name ?? 'Cliente',
+      asset_category: asset?.category ?? 'Equipo',
+      brand: asset?.brand ?? '',
+      model: asset?.model ?? '',
+      serial_number: asset?.serial_imei ?? '',
+      accessories_received: localMatchedOrder.accessories_received,
+      reported_symptoms: localMatchedOrder.reported_symptoms,
+      technical_diagnosis: localMatchedOrder.technical_diagnosis,
+      work_performed: localMatchedOrder.work_performed,
+      parts_and_observations: localMatchedOrder.parts_and_observations,
+      items: localMatchedOrder.items.map((it) => ({
+        description: it.description,
+        quantity: it.qty,
+        total: it.qty * it.unit_price,
+      })),
+      total_amount: fin.totalAmount,
+      paid_amount: fin.paidAmount,
+      balance_due: fin.balanceDue,
+      photos: localMatchedOrder.photos.map((ph) => ({
+        id: ph.id,
+        url: ph.url,
+        stage: ph.stage,
+        caption: ph.caption,
+      })),
+    };
+  })();
 
-  const financials =
-    matchedOrder && tenant
-      ? calculateOrderFinancials(
-          matchedOrder.items,
-          matchedOrder.discount_amount,
-          matchedOrder.apply_iva,
-          tenant.iva_rate,
-          matchedOrder.payments
-        )
-      : null;
+  const trackData = liveMode ? rpcData : localFallbackData;
+
+  const itemsSubtotal = trackData
+    ? trackData.items.reduce((acc, it) => acc + it.total, 0)
+    : 0;
+  const impliedTaxAndAdj = trackData
+    ? Math.max(0, trackData.total_amount - itemsSubtotal)
+    : 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setSearchedCode(inputCode);
+    const clean = inputCode.trim().toUpperCase();
+    setSearchedCode(clean);
+    if (clean && typeof window !== 'undefined') {
+      try {
+        window.history.replaceState({}, '', `/?track=${encodeURIComponent(clean)}`);
+      } catch {
+        // Ignore history restrictions
+      }
+    }
   };
 
   return (
@@ -158,11 +197,11 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
 
           <button
             type="button"
-            onClick={onBackToErp}
+            onClick={onBackToApp}
             className="inline-flex items-center gap-1.5 rounded-xl border border-white/15 bg-[#1E3A8A] hover:bg-[#3E92CC] px-3.5 py-2 text-xs font-semibold text-white whitespace-nowrap transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
-            <span>Volver al Taller FixiCloud</span>
+            <span>Volver a FixiCloud</span>
           </button>
         </div>
       </header>
@@ -204,7 +243,16 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
           <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-10 text-center text-xs font-medium text-slate-600">
             Consultando estado en vivo vía Supabase RPC...
           </div>
-        ) : !matchedOrder || !tenant || !financials ? (
+        ) : !searchedCode.trim() ? (
+          <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-10 text-center">
+            <p className="text-sm font-semibold text-slate-800">
+              Ingresa tu código de seguimiento o folio para consultar
+            </p>
+            <p className="mt-1 text-xs text-slate-500">
+              Encontrarás el código de 8 caracteres o folio en el comprobante entregado por el taller.
+            </p>
+          </div>
+        ) : !trackData ? (
           <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-10 text-center">
             <p className="text-sm font-semibold text-slate-800">
               No encontramos una orden con el código &ldquo;{searchedCode}&rdquo;
@@ -220,18 +268,22 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <div className="text-xs font-semibold text-[#3E92CC]">
-                    {tenant.name} · {branch?.name ?? 'Casa Matriz'}
+                    {trackData.company_name} · {trackData.branch_name}
                   </div>
                   <h2 className="mt-1 text-lg font-semibold text-slate-900">
-                    Orden <span className="font-mono font-bold text-[#0A2463]">{matchedOrder.folio}</span> —{' '}
-                    {asset ? `${asset.category} ${asset.brand} ${asset.model}` : 'Equipo'}
+                    Orden <span className="font-mono font-bold text-[#0A2463]">{trackData.folio}</span> —{' '}
+                    {`${trackData.asset_category} ${trackData.brand} ${trackData.model}`.trim()}
                   </h2>
                   <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                    <span>Cliente: {client?.name}</span>
+                    <span>Cliente: {trackData.client_name}</span>
+                    {trackData.serial_number && (
+                      <>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono">S/N: {trackData.serial_number}</span>
+                      </>
+                    )}
                     <span aria-hidden="true">·</span>
-                    <span className="font-mono">S/N: {asset?.serial_imei}</span>
-                    <span aria-hidden="true">·</span>
-                    <span className="font-mono">Código: {matchedOrder.tracking_code}</span>
+                    <span className="font-mono">Código: {trackData.tracking_code}</span>
                   </div>
                 </div>
 
@@ -239,10 +291,10 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                   <div className="text-xs text-slate-500">Estado Actual</div>
                   <div
                     className={`mt-0.5 text-base font-bold ${
-                      ORDER_STATUS_META[matchedOrder.status].textColor
+                      ORDER_STATUS_META[trackData.status].textColor
                     }`}
                   >
-                    {ORDER_STATUS_META[matchedOrder.status].label}
+                    {ORDER_STATUS_META[trackData.status].label}
                   </div>
                 </div>
               </div>
@@ -250,7 +302,7 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               {/* 6-Step Progress Bar */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
                 {PROGRESS_STEPS.map((st, idx) => {
-                  const currentIdx = ORDER_STATUS_META[matchedOrder.status].stepIndex;
+                  const currentIdx = ORDER_STATUS_META[trackData.status].stepIndex;
                   const done = idx <= currentIdx;
                   const isCurrent = idx === currentIdx;
                   return (
@@ -296,46 +348,47 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                   <div>
                     <div className="font-semibold text-slate-500">Falla Reportada</div>
                     <p className="mt-0.5 text-slate-800 leading-relaxed">
-                      {matchedOrder.reported_symptoms}
+                      {trackData.reported_symptoms || 'Sin observaciones iniciales.'}
                     </p>
                   </div>
                   <div>
                     <div className="font-semibold text-slate-500">Diagnóstico Técnico</div>
                     <p className="mt-0.5 text-slate-800 leading-relaxed">
-                      {matchedOrder.technical_diagnosis ||
+                      {trackData.technical_diagnosis ||
                         'Equipo en evaluación por nuestro equipo técnico.'}
                     </p>
                   </div>
-                  {matchedOrder.work_performed && (
+                  {trackData.work_performed && (
                     <div>
                       <div className="font-semibold text-slate-500">Trabajo Realizado</div>
                       <p className="mt-0.5 text-slate-800 leading-relaxed">
-                        {matchedOrder.work_performed}
+                        {trackData.work_performed}
                       </p>
                     </div>
                   )}
-                  {matchedOrder.parts_and_observations && (
+                  {trackData.parts_and_observations && (
                     <div>
                       <div className="font-semibold text-slate-500">
                         Observaciones y Garantía
                       </div>
                       <p className="mt-0.5 text-slate-800 leading-relaxed">
-                        {matchedOrder.parts_and_observations}
+                        {trackData.parts_and_observations}
                       </p>
                     </div>
                   )}
                 </div>
 
-                {branch && (
+                {(trackData.branch_address || trackData.branch_phone) && (
                   <div className="pt-3 border-t border-[#D8E4EC]/70 flex items-start gap-2 text-xs text-slate-600">
                     <MapPin className="h-4 w-4 text-[#3E92CC] shrink-0 mt-0.5" />
                     <div>
                       <div className="font-semibold text-slate-800">
-                        {branch.name} — {branch.address}, {branch.city}
+                        {trackData.branch_name}
+                        {trackData.branch_address ? ` — ${trackData.branch_address}` : ''}
                       </div>
-                      <div>
-                        Horario: {branch.business_hours} · Tel: {branch.phone}
-                      </div>
+                      {trackData.branch_phone && (
+                        <div>Tel: {trackData.branch_phone}</div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -347,22 +400,24 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                 </h3>
 
                 <div className="divide-y divide-[#D8E4EC]/50 text-xs">
-                  {matchedOrder.items.length === 0 ? (
+                  {trackData.items.length === 0 ? (
                     <p className="py-3 text-slate-500">
                       Presupuesto aún en elaboración técnica.
                     </p>
                   ) : (
-                    matchedOrder.items.map((item) => (
+                    trackData.items.map((item, idx) => (
                       <div
-                        key={item.id}
+                        key={`${item.description}-${idx}`}
                         className="py-2.5 flex items-center justify-between gap-2"
                       >
                         <div className="text-slate-800">
-                          <span className="font-mono text-[#0A2463] font-semibold">{item.qty}x</span>{' '}
+                          <span className="font-mono text-[#0A2463] font-semibold">
+                            {item.quantity}x
+                          </span>{' '}
                           {item.description}
                         </div>
                         <div className="font-mono font-semibold text-slate-900 tabular-nums shrink-0">
-                          {formatCurrency(item.qty * item.unit_price, tenant.currency)}
+                          {formatCurrency(item.total, trackData.currency)}
                         </div>
                       </div>
                     ))
@@ -370,48 +425,42 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
                 </div>
 
                 <div className="border-t border-[#D8E4EC]/70 pt-3 space-y-1.5 text-xs">
-                  <div className="flex justify-between text-slate-600">
-                    <span>Subtotal</span>
-                    <span className="font-mono tabular-nums">
-                      {formatCurrency(financials.subtotal, tenant.currency)}
-                    </span>
-                  </div>
-                  {financials.discount > 0 && (
+                  {itemsSubtotal > 0 && (
                     <div className="flex justify-between text-slate-600">
-                      <span>Descuento</span>
+                      <span>Subtotal Ítems</span>
                       <span className="font-mono tabular-nums">
-                        - {formatCurrency(financials.discount, tenant.currency)}
+                        {formatCurrency(itemsSubtotal, trackData.currency)}
                       </span>
                     </div>
                   )}
-                  <div className="flex justify-between text-slate-600">
-                    <span>
-                      IVA ({matchedOrder.apply_iva ? `${tenant.iva_rate}%` : 'No aplica'})
-                    </span>
-                    <span className="font-mono tabular-nums">
-                      {formatCurrency(financials.ivaAmount, tenant.currency)}
-                    </span>
-                  </div>
+                  {impliedTaxAndAdj > 0 && (
+                    <div className="flex justify-between text-slate-600">
+                      <span>Impuestos / IVA</span>
+                      <span className="font-mono tabular-nums">
+                        {formatCurrency(impliedTaxAndAdj, trackData.currency)}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm font-bold text-[#0A2463] pt-2 border-t border-[#D8E4EC]/70">
                     <span>Total</span>
                     <span className="font-mono tabular-nums">
-                      {formatCurrency(financials.totalAmount, tenant.currency)}
+                      {formatCurrency(trackData.total_amount, trackData.currency)}
                     </span>
                   </div>
                   <div className="flex justify-between text-[#1B998B] font-semibold">
                     <span>Abonado</span>
                     <span className="font-mono tabular-nums">
-                      - {formatCurrency(financials.paidAmount, tenant.currency)}
+                      - {formatCurrency(trackData.paid_amount, trackData.currency)}
                     </span>
                   </div>
                   <div className="flex justify-between text-sm font-bold pt-2 border-t border-[#D8E4EC]/70">
                     <span>Saldo Pendiente</span>
                     <span
                       className={`font-mono tabular-nums ${
-                        financials.balanceDue > 0 ? 'text-amber-700' : 'text-[#1B998B]'
+                        trackData.balance_due > 0 ? 'text-amber-700' : 'text-[#1B998B]'
                       }`}
                     >
-                      {formatCurrency(financials.balanceDue, tenant.currency)}
+                      {formatCurrency(trackData.balance_due, trackData.currency)}
                     </span>
                   </div>
                 </div>
@@ -419,44 +468,59 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
             </div>
 
             {/* Evidence Gallery */}
-            {matchedOrder.photos.length > 0 && (
+            {trackData.photos.length > 0 && (
               <section className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
                 <div className="flex items-center gap-2 pb-2 border-b border-[#D8E4EC]/70">
                   <Camera className="h-4 w-4 text-[#3E92CC]" />
                   <h3 className="text-sm font-semibold text-slate-900">
-                    Evidencia Fotográfica del Taller ({matchedOrder.photos.length})
+                    Evidencia Fotográfica del Taller ({trackData.photos.length})
                   </h3>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {matchedOrder.photos.map((photo) => (
-                    <div
-                      key={photo.id}
-                      className="rounded-2xl border border-[#D8E4EC]/70 overflow-hidden bg-[#F4F6FB]/60"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => setLightboxPhoto(photo)}
-                        className="block w-full aspect-video bg-slate-200 overflow-hidden"
+                  {trackData.photos.map((photo) => {
+                    const failed = Boolean(failedPhotoIds[photo.id]);
+                    return (
+                      <div
+                        key={photo.id}
+                        className="rounded-2xl border border-[#D8E4EC]/70 overflow-hidden bg-[#F4F6FB]/60"
                       >
-                        <img
-                          src={photo.url}
-                          alt={photo.caption}
-                          referrerPolicy="no-referrer"
-                          className="h-full w-full object-cover"
-                        />
-                      </button>
-                      <div className="p-3.5">
-                        <div className="text-[11px] font-bold text-[#0A2463]">
-                          {photo.stage === 'reception'
-                            ? 'Recepción'
-                            : photo.stage === 'diagnosis'
-                            ? 'Diagnóstico'
-                            : 'Entrega'}
+                        {failed || !photo.url ? (
+                          <div className="w-full aspect-video bg-slate-100 flex flex-col items-center justify-center gap-1.5 text-slate-400">
+                            <ImageOff className="h-6 w-6" />
+                            <span className="text-[11px] font-medium">
+                              Imagen no disponible en Storage
+                            </span>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => setLightboxPhoto(photo)}
+                            className="block w-full aspect-video bg-slate-200 overflow-hidden"
+                          >
+                            <img
+                              src={photo.url}
+                              alt={photo.caption}
+                              referrerPolicy="no-referrer"
+                              onError={() =>
+                                setFailedPhotoIds((prev) => ({ ...prev, [photo.id]: true }))
+                              }
+                              className="h-full w-full object-cover"
+                            />
+                          </button>
+                        )}
+                        <div className="p-3.5">
+                          <div className="text-[11px] font-bold text-[#0A2463]">
+                            {photo.stage === 'reception'
+                              ? 'Recepción'
+                              : photo.stage === 'diagnosis'
+                              ? 'Diagnóstico'
+                              : 'Entrega'}
+                          </div>
+                          <p className="mt-0.5 text-xs text-slate-700">{photo.caption}</p>
                         </div>
-                        <p className="mt-0.5 text-xs text-slate-700">{photo.caption}</p>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </section>
             )}
@@ -501,12 +565,25 @@ export const PublicTrackPortal: React.FC<PublicTrackPortalProps> = ({
               </button>
             </div>
             <div className="bg-slate-900 flex justify-center">
-              <img
-                src={lightboxPhoto.url}
-                alt={lightboxPhoto.caption}
-                referrerPolicy="no-referrer"
-                className="max-h-[75vh] w-auto object-contain"
-              />
+              {failedPhotoIds[lightboxPhoto.id] ? (
+                <div className="py-16 flex flex-col items-center gap-2 text-slate-300 text-xs">
+                  <ImageOff className="h-8 w-8" />
+                  <span>No se pudo cargar la imagen desde Storage</span>
+                </div>
+              ) : (
+                <img
+                  src={lightboxPhoto.url}
+                  alt={lightboxPhoto.caption}
+                  referrerPolicy="no-referrer"
+                  onError={() =>
+                    setFailedPhotoIds((prev) => ({
+                      ...prev,
+                      [lightboxPhoto.id]: true,
+                    }))
+                  }
+                  className="max-h-[75vh] w-auto object-contain"
+                />
+              )}
             </div>
           </div>
         </div>

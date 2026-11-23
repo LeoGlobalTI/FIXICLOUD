@@ -1,10 +1,12 @@
 import type {
   AppUser,
   Branch,
+  CatalogItem,
   Client,
   CustomerAsset,
   ErpState,
   IndustrySector,
+  LoanAsset,
   OrderStatus,
   RoleType,
   ServiceModality,
@@ -25,6 +27,27 @@ export interface FinancialSummary {
 }
 
 const safeNum = (v: number): number => (Number.isFinite(v) ? v : 0);
+
+export function getLocalIsoDate(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+export function filterLowStockCatalogItems(
+  items: CatalogItem[],
+  tenantId: string,
+  branchId: string
+): CatalogItem[] {
+  return items.filter(
+    (item) =>
+      item.tenant_id === tenantId &&
+      (branchId === 'ALL' || item.branch_id === branchId) &&
+      item.category === 'part' &&
+      item.stock_qty <= item.min_stock
+  );
+}
 
 export function calculateOrderFinancials(
   items: WorkOrderItem[],
@@ -135,9 +158,14 @@ export function generateTrackingCode(): string {
   return out;
 }
 
-export function generateNextFolio(prefix: string, orders: WorkOrder[], tenantId: string): string {
+export function generateNextFolio(
+  prefix: string,
+  orders: WorkOrder[],
+  tenantId: string,
+  minFloor = 100
+): string {
   const tenantOrders = orders.filter((o) => o.tenant_id === tenantId);
-  let maxNum = 100;
+  let maxNum = minFloor;
   for (const order of tenantOrders) {
     const match = order.folio.match(/(\d+)$/);
     if (match) {
@@ -654,70 +682,47 @@ export function prepareAppUserUpdate(params: {
   };
 }
 
-export function mergeMissingSeedTenants(
-  stored: ErpState,
-  seed: ErpState
-): { state: ErpState; changed: boolean } {
-  const existingTenantIds = new Set((stored.tenants ?? []).map((t) => t.id));
-  const missingTenants = (seed.tenants ?? []).filter(
-    (t) => !existingTenantIds.has(t.id)
-  );
-
-  if (missingTenants.length === 0) {
-    return { state: stored, changed: false };
+export function isSafeImageUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  if (/^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(trimmed)) {
+    return true;
   }
-
-  const missingTenantIds = new Set(missingTenants.map((t) => t.id));
-  const mergeById = <T extends { id: string; tenant_id: string | null }>(
-    current: T[] | undefined,
-    fromSeed: T[] | undefined
-  ): T[] => {
-    const base = current ?? [];
-    const seen = new Set(base.map((item) => item.id));
-    const additions = (fromSeed ?? []).filter(
-      (item) =>
-        item.tenant_id !== null &&
-        missingTenantIds.has(item.tenant_id) &&
-        !seen.has(item.id)
-    );
-    return additions.length > 0 ? [...base, ...additions] : base;
-  };
-
-  return {
-    changed: true,
-    state: {
-      tenants: [...(stored.tenants ?? []), ...missingTenants],
-      branches: mergeById(stored.branches, seed.branches),
-      appUsers: mergeById(stored.appUsers, seed.appUsers),
-      clients: mergeById(stored.clients, seed.clients),
-      assets: mergeById(stored.assets, seed.assets),
-      catalogItems: mergeById(stored.catalogItems, seed.catalogItems),
-      loanAssets: mergeById(stored.loanAssets, seed.loanAssets),
-      workOrders: mergeById(stored.workOrders, seed.workOrders),
-      appointments: mergeById(stored.appointments, seed.appointments),
-    },
-  };
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:';
+  } catch {
+    return false;
+  }
 }
 
-export function filterErpStateForTenants(
-  state: ErpState,
-  tenantIds: Set<string>,
-  options?: { includeGlobalAppUsers?: boolean }
-): ErpState {
-  const includeGlobal = Boolean(options?.includeGlobalAppUsers);
-  return {
-    tenants: state.tenants.filter((t) => tenantIds.has(t.id)),
-    branches: state.branches.filter((b) => tenantIds.has(b.tenant_id)),
-    appUsers: state.appUsers.filter((u) =>
-      u.tenant_id === null ? includeGlobal : tenantIds.has(u.tenant_id)
-    ),
-    clients: state.clients.filter((c) => tenantIds.has(c.tenant_id)),
-    assets: state.assets.filter((a) => tenantIds.has(a.tenant_id)),
-    catalogItems: state.catalogItems.filter((i) => tenantIds.has(i.tenant_id)),
-    loanAssets: state.loanAssets.filter((l) => tenantIds.has(l.tenant_id)),
-    workOrders: state.workOrders.filter((w) => tenantIds.has(w.tenant_id)),
-    appointments: state.appointments.filter((ap) => tenantIds.has(ap.tenant_id)),
-  };
+export function hasActiveUnreturnedLoan(order: Pick<WorkOrder, 'loan'>): boolean {
+  return Boolean(order.loan && !order.loan.returned_at);
+}
+
+export function calculateWorkshopCapacity(params: {
+  activeOrdersCount: number;
+  appUsers: AppUser[];
+  tenantId: string;
+  branchId: string;
+}): { activeTechnicians: number; capacityPct: number } {
+  const activeTechnicians = params.appUsers.filter(
+    (u) =>
+      u.is_active &&
+      u.role === 'technician' &&
+      u.tenant_id === params.tenantId &&
+      (params.branchId === 'ALL' || !u.branch_id || u.branch_id === params.branchId)
+  ).length;
+  const capacityPct =
+    params.activeOrdersCount > 0
+      ? Math.min(
+          100,
+          Math.round(
+            (params.activeOrdersCount / Math.max(1, activeTechnicians * 3)) * 100
+          )
+        )
+      : 0;
+  return { activeTechnicians, capacityPct };
 }
 
 export function getDefaultAssetCategoryForSector(sector: IndustrySector): string {
@@ -803,6 +808,96 @@ export function canDeleteBranchSafely(
   return { ok: true };
 }
 
+export function canDeleteCatalogItemSafely(
+  itemId: string,
+  workOrders: WorkOrder[]
+): { ok: true } | { ok: false; error: string } {
+  const referencedCount = workOrders.filter((w) =>
+    w.items.some((it) => it.catalog_item_id === itemId)
+  ).length;
+  if (referencedCount > 0) {
+    return {
+      ok: false,
+      error: `No se puede eliminar este ítem porque está referenciado en ${referencedCount} orden(es) de trabajo.`,
+    };
+  }
+  return { ok: true };
+}
+
+export function canDeleteLoanAssetSafely(
+  loanAsset: LoanAsset,
+  workOrders: WorkOrder[]
+): { ok: true } | { ok: false; error: string } {
+  if (loanAsset.status === 'loaned') {
+    return {
+      ok: false,
+      error: `El equipo "${loanAsset.name}" está actualmente en préstamo y no puede eliminarse.`,
+    };
+  }
+  const activeLoanOrder = workOrders.find(
+    (w) => hasActiveUnreturnedLoan(w) && w.loan?.loan_asset_id === loanAsset.id
+  );
+  if (activeLoanOrder) {
+    return {
+      ok: false,
+      error: `El equipo "${loanAsset.name}" tiene un préstamo activo en la orden ${activeLoanOrder.folio}.`,
+    };
+  }
+  const historicalCount = workOrders.filter(
+    (w) => w.loan?.loan_asset_id === loanAsset.id
+  ).length;
+  if (historicalCount > 0) {
+    return {
+      ok: false,
+      error: `No se puede eliminar "${loanAsset.name}" porque tiene historial en ${historicalCount} orden(es). Márquelo en mantención si ya no está operativo.`,
+    };
+  }
+  return { ok: true };
+}
+
+export function canDeleteClientSafely(
+  clientId: string,
+  state: Pick<ErpState, 'workOrders' | 'assets' | 'appointments'>
+): { ok: true } | { ok: false; error: string } {
+  const orderCount = state.workOrders.filter((w) => w.client_id === clientId).length;
+  const assetCount = state.assets.filter((a) => a.client_id === clientId).length;
+  const aptCount = state.appointments.filter((a) => a.client_id === clientId).length;
+  const total = orderCount + assetCount + aptCount;
+  if (total > 0) {
+    return {
+      ok: false,
+      error: `No se puede eliminar el cliente porque tiene registros vinculados (${orderCount} órdenes, ${assetCount} equipos, ${aptCount} citas).`,
+    };
+  }
+  return { ok: true };
+}
+
+export function canDeleteCustomerAssetSafely(
+  assetId: string,
+  workOrders: WorkOrder[]
+): { ok: true } | { ok: false; error: string } {
+  const linked = workOrders.filter((w) => w.asset_id === assetId).length;
+  if (linked > 0) {
+    return {
+      ok: false,
+      error: `No se puede eliminar este equipo porque está asociado a ${linked} orden(es) de trabajo.`,
+    };
+  }
+  return { ok: true };
+}
+
+export function canDeleteWorkOrderSafely(
+  order: WorkOrder
+): { ok: true } | { ok: false; error: string } {
+  if (hasActiveUnreturnedLoan(order)) {
+    return {
+      ok: false,
+      error: `No se puede eliminar la orden ${order.folio} mientras tenga el equipo de préstamo "${order.loan?.asset_name}" pendiente de devolución.`,
+    };
+  }
+  return { ok: true };
+}
+
 const RECEPTIONIST_ALLOWED_TARGET_STATUSES: ReadonlySet<OrderStatus> = new Set([
   'received',
   'waiting_approval',
@@ -819,13 +914,18 @@ export function sanitizeOrderUpdateForRole(
 
   let safeStatus = updated.status;
   if (safeStatus !== existing.status) {
-    if (role === 'technician' && safeStatus === 'delivered') {
-      safeStatus = existing.status;
-    } else if (
-      role === 'receptionist' &&
-      !RECEPTIONIST_ALLOWED_TARGET_STATUSES.has(safeStatus)
-    ) {
-      safeStatus = existing.status;
+    if (role === 'technician') {
+      if (existing.status === 'delivered' || safeStatus === 'delivered') {
+        safeStatus = existing.status;
+      }
+    } else if (role === 'receptionist') {
+      if (
+        existing.status === 'delivered' ||
+        !RECEPTIONIST_ALLOWED_TARGET_STATUSES.has(safeStatus) ||
+        (existing.status === 'received' && safeStatus === 'delivered')
+      ) {
+        safeStatus = existing.status;
+      }
     }
   }
 
@@ -834,6 +934,18 @@ export function sanitizeOrderUpdateForRole(
     const existingIds = new Set(existing.photos.map((p) => p.id));
     const newlyAdded = updated.photos.filter((p) => !existingIds.has(p.id));
     safePhotos = [...existing.photos, ...newlyAdded];
+  }
+
+  let safePayments = existing.payments;
+  if (perms.canEditFinancials) {
+    safePayments = updated.payments;
+  } else if (perms.canReceivePayments) {
+    const existingPayIds = new Set(existing.payments.map((p) => p.id));
+    const newlyAddedPayments = updated.payments.filter(
+      (p) =>
+        !existingPayIds.has(p.id) && Number.isFinite(p.amount) && p.amount > 0
+    );
+    safePayments = [...existing.payments, ...newlyAddedPayments];
   }
 
   return {
@@ -846,7 +958,7 @@ export function sanitizeOrderUpdateForRole(
       ? updated.discount_amount
       : existing.discount_amount,
     items: perms.canEditFinancials ? updated.items : existing.items,
-    payments: perms.canReceivePayments ? updated.payments : existing.payments,
+    payments: safePayments,
     technical_diagnosis: perms.canEditDiagnosis
       ? updated.technical_diagnosis
       : existing.technical_diagnosis,
@@ -879,18 +991,4 @@ export function sanitizeOrderUpdateForRole(
       ? updated.visit_scheduled_at
       : existing.visit_scheduled_at,
   };
-}
-
-export function generateUniqueUsername(
-  baseUsername: string,
-  existingUsernames: Set<string>
-): string {
-  const cleanBase = baseUsername.trim().toLowerCase().replace(/^@+/, '') || 'user';
-  let candidate = cleanBase;
-  let suffix = 1;
-  while (existingUsernames.has(candidate)) {
-    candidate = `${cleanBase}${suffix++}`;
-  }
-  existingUsernames.add(candidate);
-  return candidate;
 }

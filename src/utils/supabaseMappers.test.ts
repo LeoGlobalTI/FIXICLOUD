@@ -1,7 +1,5 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
 import type {
   AppUser,
   Appointment,
@@ -30,7 +28,9 @@ import {
   mapOrderLoanFromDb,
   mapOrderPaymentFromDb,
   mapOrderPhotoFromDb,
+  mapPublicRpcOrderToTrackData,
   mapTenantToDb,
+  mapTenantUpdateToDb,
   mapWorkOrderFromDb,
   mapWorkOrderItemToDb,
   mapWorkOrderLoanToDb,
@@ -38,6 +38,8 @@ import {
   mapWorkOrderPhotoToDb,
   mapWorkOrderToDb,
   stripOptionalBranchColumns,
+  stripOptionalTenantColumns,
+  stripOptionalWorkOrderColumns,
 } from './supabaseMappers';
 
 const sampleTenant: Tenant = {
@@ -168,24 +170,7 @@ const sampleAppointment: Appointment = {
   created_at: '2026-11-10T09:00:00Z',
 };
 
-describe('UUID validation and seedData audit', () => {
-  it('verifies every id and *_id field literal in src/data/seedData.ts is a valid UUID (or null)', () => {
-    const seedPath = path.resolve(process.cwd(), 'src/data/seedData.ts');
-    const source = fs.readFileSync(seedPath, 'utf8');
-    const idFieldRegex =
-      /\b(?:id|tenant_id|branch_id|client_id|asset_id|catalog_item_id|loan_asset_id|work_order_id)\s*:\s*(?:'([^']+)'|"([^"]+)")/g;
-
-    const invalidIds: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = idFieldRegex.exec(source)) !== null) {
-      const value = match[1] ?? match[2];
-      if (!isValidUUID(value)) {
-        invalidIds.push(value);
-      }
-    }
-    assert.deepEqual(invalidIds, [], `Invalid non-UUID IDs found in seedData.ts: ${invalidIds.join(', ')}`);
-  });
-
+describe('UUID validation and legacy ID detection', () => {
   it('ensureUUID preserves valid UUIDs, deterministically converts legacy strings, and generates fresh UUIDs for empty inputs', () => {
     const generated = generateUUID();
     assert.ok(isValidUUID(generated));
@@ -233,7 +218,7 @@ describe('UUID validation and seedData audit', () => {
 });
 
 describe('PostgreSQL Exact Column Mappers', () => {
-  it('mapTenantToDb emits industry/tax_rate/order_prefix and never emits sector/iva_rate/folio_prefix', () => {
+  it('mapTenantToDb and mapTenantUpdateToDb emit exact columns and omit last_order_number on update', () => {
     const dbTenant = mapTenantToDb(sampleTenant, 105) as unknown as Record<
       string,
       unknown
@@ -245,6 +230,14 @@ describe('PostgreSQL Exact Column Mappers', () => {
     assert.equal('sector' in dbTenant, false);
     assert.equal('iva_rate' in dbTenant, false);
     assert.equal('folio_prefix' in dbTenant, false);
+
+    const dbTenantUpdate = mapTenantUpdateToDb(sampleTenant) as unknown as Record<
+      string,
+      unknown
+    >;
+    assert.equal(dbTenantUpdate.name, sampleTenant.name);
+    assert.equal('id' in dbTenantUpdate, false);
+    assert.equal('last_order_number' in dbTenantUpdate, false);
   });
 
   it('mapBranchesToDbSafe enforces at most one is_headquarters=true per tenant_id', () => {
@@ -491,19 +484,19 @@ describe('PostgreSQL Exact Column Mappers', () => {
   });
 
   it('mapWorkOrderPhotoToDb sends exact columns (storage_path, public_url) and NEVER url', () => {
-    const demoPhoto = {
+    const extPhoto = {
       id: generateUUID(),
       url: 'https://example.com/photo.jpg',
       stage: 'reception' as const,
       caption: 'Bisagra rota',
       created_at: '2026-11-10T10:00:00Z',
     };
-    const dbDemoPhoto = mapWorkOrderPhotoToDb(demoPhoto, {
+    const dbExtPhoto = mapWorkOrderPhotoToDb(extPhoto, {
       tenantId: sampleTenant.id,
       workOrderId: sampleWorkOrder.id,
     }) as unknown as Record<string, unknown>;
 
-    assert.deepEqual(Object.keys(dbDemoPhoto).sort(), [
+    assert.deepEqual(Object.keys(dbExtPhoto).sort(), [
       'caption',
       'id',
       'public_url',
@@ -512,13 +505,13 @@ describe('PostgreSQL Exact Column Mappers', () => {
       'tenant_id',
       'work_order_id',
     ]);
-    assert.equal(dbDemoPhoto.storage_path, 'demo');
-    assert.equal(dbDemoPhoto.public_url, 'https://example.com/photo.jpg');
-    assert.equal('url' in dbDemoPhoto, false);
+    assert.equal(dbExtPhoto.storage_path, 'external');
+    assert.equal(dbExtPhoto.public_url, 'https://example.com/photo.jpg');
+    assert.equal('url' in dbExtPhoto, false);
 
     const storagePhoto = mapWorkOrderPhotoToDb(
       {
-        ...demoPhoto,
+        ...extPhoto,
         url: 'https://abc.supabase.co/storage/v1/object/public/order-photos/1111/2222/1234.webp',
       },
       {
@@ -528,8 +521,8 @@ describe('PostgreSQL Exact Column Mappers', () => {
     );
     assert.equal(storagePhoto.storage_path, '1111/2222/1234.webp');
 
-    const roundTrip = mapOrderPhotoFromDb(dbDemoPhoto);
-    assert.equal(roundTrip.url, demoPhoto.url);
+    const roundTrip = mapOrderPhotoFromDb(dbExtPhoto);
+    assert.equal(roundTrip.url, extPhoto.url);
     assert.equal(roundTrip.stage, 'reception');
   });
 
@@ -596,7 +589,7 @@ describe('PostgreSQL Exact Column Mappers', () => {
     assert.equal(passwordless.role, 'company_admin');
   });
 
-  it('mapBranchToDb includes city/business_hours and stripOptionalBranchColumns strips them cleanly', () => {
+  it('mapBranchToDb emits extended optional columns and stripOptionalBranchColumns strips city and business_hours safely', () => {
     const dbBranch = mapBranchToDb({
       id: '11111111-1111-4111-8111-111111111101',
       tenant_id: sampleTenant.id,
@@ -608,16 +601,100 @@ describe('PostgreSQL Exact Column Mappers', () => {
       phone: '+56 32 222 1111',
       business_hours: 'Lun-Vie 09:00-18:00',
     });
+
+    assert.equal(dbBranch.name, 'Sucursal Norte');
+    assert.equal(dbBranch.code, 'SUC-NORTE');
     assert.equal(dbBranch.city, 'Viña del Mar');
     assert.equal(dbBranch.business_hours, 'Lun-Vie 09:00-18:00');
 
-    const stripped = stripOptionalBranchColumns(dbBranch) as unknown as Record<
-      string,
-      unknown
-    >;
-    assert.equal('city' in stripped, false);
-    assert.equal('business_hours' in stripped, false);
-    assert.equal(stripped.name, 'Sucursal Norte');
+    const strippedBranch = stripOptionalBranchColumns(
+      dbBranch as unknown as Record<string, unknown>
+    );
+    assert.equal('city' in strippedBranch, false);
+    assert.equal('business_hours' in strippedBranch, false);
+    assert.equal(strippedBranch.name, 'Sucursal Norte');
+
+    const strippedTenant = stripOptionalTenantColumns(
+      mapTenantToDb(sampleTenant, 105) as unknown as Record<string, unknown>
+    );
+    assert.equal('whatsapp_templates' in strippedTenant, false);
+    assert.equal('phone' in strippedTenant, false);
+    assert.equal('email' in strippedTenant, false);
+    assert.equal('warranty_days' in strippedTenant, false);
+    assert.equal(strippedTenant.name, sampleTenant.name);
+
+    const dbDelivered = mapWorkOrderToDb(
+      {
+        ...sampleWorkOrder,
+        status: 'delivered',
+        delivered_at: '2026-11-12T18:00:00Z',
+      },
+      19
+    );
+    assert.equal(dbDelivered.delivered_at, '2026-11-12T18:00:00Z');
+    const strippedWo = stripOptionalWorkOrderColumns(
+      dbDelivered as unknown as Record<string, unknown>
+    );
+    assert.equal('delivered_at' in strippedWo, false);
+  });
+
+  it('mapAppointmentFromDb handles notes containing em-dash and legacy formatted descriptions', () => {
+    const aptWithEmDash: Appointment = {
+      ...sampleAppointment,
+      notes: 'Revisar pantalla — incluir cargador — urgente',
+    };
+    const dbApt = mapAppointmentToDb(aptWithEmDash) as unknown as Record<string, unknown>;
+    const roundTrip = mapAppointmentFromDb(dbApt);
+    assert.equal(roundTrip.technician, 'Camila Herrera');
+    assert.equal(roundTrip.notes, 'Revisar pantalla — incluir cargador — urgente');
+
+    const legacyMapped = mapAppointmentFromDb({
+      id: sampleAppointment.id,
+      tenant_id: sampleAppointment.tenant_id,
+      branch_id: sampleAppointment.branch_id,
+      client_id: sampleAppointment.client_id,
+      subject: 'Diagnóstico',
+      description: 'Técnico: Diego Torres — Llevar SSD de prueba',
+      scheduled_start: '2026-11-14T10:00:00Z',
+      scheduled_end: '2026-11-14T11:00:00Z',
+      status: 'scheduled',
+    });
+    assert.equal(legacyMapped.technician, 'Diego Torres');
+    assert.equal(legacyMapped.notes, 'Llevar SSD de prueba');
+  });
+
+  it('mapPublicRpcOrderToTrackData parses flat get_public_order_status RPC payloads', () => {
+    const mapped = mapPublicRpcOrderToTrackData({
+      folio: 'OT-000105',
+      tracking_code: '8F92A1C4',
+      status: 'in_repair',
+      modality: 'workshop',
+      company_name: 'GlobalTech Service SPA',
+      currency: 'CLP',
+      branch_name: 'Casa Matriz Rancagua',
+      client_name: 'Carlos Mendoza',
+      asset_category: 'Notebook',
+      brand: 'Lenovo',
+      model: 'ThinkPad T14',
+      serial_number: 'PF3X9981',
+      items: [{ description: 'SSD 1TB', quantity: 1, total: 89900 }],
+      total_amount: 106981,
+      paid_amount: 30000,
+      balance_due: 76981,
+      photos: [
+        {
+          url: 'https://cdn.fixicloud.cl/1.webp',
+          stage: 'reception',
+          caption: 'Ingreso',
+        },
+      ],
+    });
+    assert.ok(mapped);
+    assert.equal(mapped.folio, 'OT-000105');
+    assert.equal(mapped.balance_due, 76981);
+    assert.equal(mapped.items[0].total, 89900);
+    assert.equal(mapped.photos[0].stage, 'reception');
+    assert.equal(mapPublicRpcOrderToTrackData(null), null);
   });
 
   it('normalizes timezone offsets on appointments and round-trips work order promised_at for datetime-local input', () => {

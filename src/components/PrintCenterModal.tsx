@@ -197,14 +197,15 @@ export const PrintCenterModal: React.FC<PrintCenterModalProps> = ({
   const [qrSvg, setQrSvg] = useState<string>('');
 
   const t = DICT[lang];
+  const isTaxForcedOn = template === 'SalIVA.rpt' || template === 'SalIVADom.rpt';
+  const isTaxForcedOff = template === 'Salida.rpt' || template === 'SalidaDom.rpt';
+  const templateIvaMismatch =
+    (isTaxForcedOn && !order.apply_iva) || (isTaxForcedOff && order.apply_iva);
+
   const financials = calculateOrderFinancials(
     order.items,
     order.discount_amount,
-    template === 'SalIVA.rpt' || template === 'SalIVADom.rpt'
-      ? true
-      : template === 'Salida.rpt' || template === 'SalidaDom.rpt'
-      ? false
-      : order.apply_iva,
+    isTaxForcedOn ? true : isTaxForcedOff ? false : order.apply_iva,
     tenant.iva_rate,
     order.payments
   );
@@ -383,28 +384,37 @@ export const PrintCenterModal: React.FC<PrintCenterModalProps> = ({
               {t.receiptTitle}
             </div>
             {(() => {
-              const chosenPayment =
+              const chosenPaymentIndex =
                 selectedPaymentId === 'ALL'
-                  ? null
-                  : order.payments.find((p) => p.id === selectedPaymentId);
+                  ? -1
+                  : order.payments.findIndex((p) => p.id === selectedPaymentId);
+              const chosenPayment =
+                chosenPaymentIndex >= 0 ? order.payments[chosenPaymentIndex] : null;
               const receiptAmt = chosenPayment
                 ? chosenPayment.amount
                 : financials.paidAmount;
+              const receiptNumber = `REC-${order.folio.replace(/\D/g, '')}${
+                chosenPaymentIndex >= 0 ? `-${chosenPaymentIndex + 1}` : ''
+              }`;
               return (
                 <div className="grid grid-cols-2 gap-4 border border-slate-300 rounded p-4">
-                  <div>
+                  <div className="space-y-0.5">
                     <div>
                       <strong>{t.receiptNo}:</strong>{' '}
-                      <span className="font-mono">
-                        REC-{order.folio.replace(/\D/g, '')}
-                      </span>
+                      <span className="font-mono">{receiptNumber}</span>
                     </div>
+                    {chosenPayment?.date && (
+                      <div>
+                        <strong>{t.date}:</strong>{' '}
+                        <span className="font-mono">{chosenPayment.date}</span>
+                      </div>
+                    )}
                     <div>
-                      <strong>{t.name}:</strong> {client?.name}
+                      <strong>{t.name}:</strong> {client?.name || '—'}
                     </div>
                     <div>
                       <strong>{t.taxId}:</strong>{' '}
-                      <span className="font-mono">{client?.rut}</span>
+                      <span className="font-mono">{client?.rut || '—'}</span>
                     </div>
                     <div>
                       <strong>{t.equipmentInfo}:</strong> {asset?.brand} {asset?.model}
@@ -535,8 +545,8 @@ export const PrintCenterModal: React.FC<PrintCenterModalProps> = ({
                 </div>
                 <div>
                   <strong>{t.serial}:</strong>{' '}
-                  <span className="font-mono">{asset?.serial_imei}</span> ·{' '}
-                  <strong>{t.assignedTech}:</strong> {order.assigned_technician}
+                  <span className="font-mono">{asset?.serial_imei || '—'}</span> ·{' '}
+                  <strong>{t.assignedTech}:</strong> {order.assigned_technician || '—'}
                 </div>
                 <div>
                   <strong>{t.accessories}:</strong> {order.accessories_received}
@@ -827,6 +837,14 @@ export const PrintCenterModal: React.FC<PrintCenterModalProps> = ({
             </button>
           ))}
         </div>
+
+        {templateIvaMismatch && (
+          <div className="no-print bg-amber-50 border-b border-amber-200 px-5 py-2 text-xs text-amber-800 font-medium">
+            {isTaxForcedOn
+              ? `Nota: La orden ${order.folio} está configurada sin IVA, pero la plantilla ${template} desglosa e incluye IVA (${tenant.iva_rate}%).`
+              : `Nota: La orden ${order.folio} incluye IVA (${tenant.iva_rate}%), pero la plantilla ${template} omite el desglose de IVA.`}
+          </div>
+        )}
 
         {template === 'Recibo.rpt' && order.payments.length > 0 && (
           <div className="no-print bg-[#EBF4FA] border-b border-[#D8E4EC] px-5 py-2.5 flex items-center gap-3 text-xs">

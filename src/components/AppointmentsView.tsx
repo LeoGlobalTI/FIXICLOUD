@@ -24,6 +24,7 @@ import type {
 import {
   buildWhatsAppUrl,
   getDefaultTenantTechnicianName,
+  getLocalIsoDate,
   getRolePermissions,
 } from '../utils/erpLogic';
 import { generateUUID } from '../utils/uuid';
@@ -98,7 +99,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
     tenant.id,
     defaultBranchId
   );
-  const todayIso = new Date().toISOString().slice(0, 10);
+  const todayIso = getLocalIsoDate();
 
   // Form states
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -164,7 +165,7 @@ export const AppointmentsView: React.FC<AppointmentsViewProps> = ({
     setModality('home_service');
     setVisitAddress(tenantClients[0]?.address ?? '');
     setTechnician(defaultTechName);
-    setDate(new Date().toISOString().slice(0, 10));
+    setDate(getLocalIsoDate());
     setStartTime('10:00');
     setEndTime('11:30');
     setNotes('');

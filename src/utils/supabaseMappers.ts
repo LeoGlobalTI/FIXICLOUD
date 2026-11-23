@@ -10,6 +10,7 @@ import type {
   OrderStatus,
   PaymentMethod,
   PhotoStage,
+  PublicOrderTrackData,
   ServiceModality,
   Tenant,
   WorkOrder,
@@ -117,8 +118,14 @@ interface DbTenantRow {
   last_order_number: number;
   terms_and_conditions: string | null;
   whatsapp_enabled: boolean;
+  whatsapp_templates: Tenant['whatsapp_templates'];
+  phone: string | null;
+  email: string | null;
+  warranty_days: number;
   is_active: boolean;
 }
+
+type DbTenantUpdateRow = Omit<DbTenantRow, 'id' | 'last_order_number'>;
 
 export function mapTenantToDb(tenant: Tenant, lastOrderNumber = 105): DbTenantRow {
   return {
@@ -129,13 +136,55 @@ export function mapTenantToDb(tenant: Tenant, lastOrderNumber = 105): DbTenantRo
     industry: sanitizeIndustry(tenant.sector),
     currency: tenant.currency || 'CLP',
     tax_rate: Number(tenant.iva_rate ?? 19),
-    logo_url: null,
+    logo_url: tenant.logo_url ?? null,
     order_prefix: tenant.folio_prefix || 'OT',
     last_order_number: lastOrderNumber,
     terms_and_conditions: tenant.legal_terms ?? null,
     whatsapp_enabled: Boolean(tenant.whatsapp_enabled),
+    whatsapp_templates: tenant.whatsapp_templates ?? DEFAULT_WHATSAPP_TEMPLATES,
+    phone: tenant.phone || null,
+    email: tenant.email || null,
+    warranty_days: Number(tenant.warranty_days ?? 90),
     is_active: true,
   };
+}
+
+export function mapTenantUpdateToDb(tenant: Tenant): DbTenantUpdateRow {
+  return {
+    name: tenant.name,
+    legal_name: tenant.name,
+    tax_id: tenant.tax_id || null,
+    industry: sanitizeIndustry(tenant.sector),
+    currency: tenant.currency || 'CLP',
+    tax_rate: Number(tenant.iva_rate ?? 19),
+    logo_url: tenant.logo_url ?? null,
+    order_prefix: tenant.folio_prefix || 'OT',
+    terms_and_conditions: tenant.legal_terms ?? null,
+    whatsapp_enabled: Boolean(tenant.whatsapp_enabled),
+    whatsapp_templates: tenant.whatsapp_templates ?? DEFAULT_WHATSAPP_TEMPLATES,
+    phone: tenant.phone || null,
+    email: tenant.email || null,
+    warranty_days: Number(tenant.warranty_days ?? 90),
+    is_active: true,
+  };
+}
+
+export function stripOptionalTenantColumns<T extends object>(
+  row: T
+): Omit<T, 'whatsapp_templates' | 'phone' | 'email' | 'warranty_days'> {
+  const {
+    whatsapp_templates: _wt,
+    phone: _ph,
+    email: _em,
+    warranty_days: _wd,
+    ...base
+  } = row as T & {
+    whatsapp_templates?: unknown;
+    phone?: unknown;
+    email?: unknown;
+    warranty_days?: unknown;
+  };
+  return base as Omit<T, 'whatsapp_templates' | 'phone' | 'email' | 'warranty_days'>;
 }
 
 interface DbBranchRow {
@@ -147,8 +196,8 @@ interface DbBranchRow {
   address: string | null;
   city: string | null;
   phone: string | null;
-  business_hours: string | null;
   email: string | null;
+  business_hours: string | null;
   is_active: boolean;
 }
 
@@ -162,17 +211,20 @@ export function mapBranchToDb(branch: Branch, forceNonHq = false): DbBranchRow {
     address: branch.address || null,
     city: branch.city || null,
     phone: branch.phone || null,
+    email: branch.email || null,
     business_hours: branch.business_hours || null,
-    email: null,
     is_active: true,
   };
 }
 
-export function stripOptionalBranchColumns(
-  row: DbBranchRow
-): Omit<DbBranchRow, 'city' | 'business_hours'> {
-  const { city: _city, business_hours: _hours, ...rest } = row;
-  return rest;
+export function stripOptionalBranchColumns<T extends object>(
+  row: T
+): Omit<T, 'city' | 'business_hours'> {
+  const { city: _c, business_hours: _bh, ...base } = row as T & {
+    city?: unknown;
+    business_hours?: unknown;
+  };
+  return base as Omit<T, 'city' | 'business_hours'>;
 }
 
 export function mapBranchesToDbSafe(branches: Branch[]): DbBranchRow[] {
@@ -347,6 +399,7 @@ interface DbWorkOrderRow {
   warranty_days: number;
   received_at: string;
   promised_at: string | null;
+  delivered_at: string | null;
 }
 
 export function mapWorkOrderToDb(order: WorkOrder, taxRate = 19): DbWorkOrderRow {
@@ -365,6 +418,11 @@ export function mapWorkOrderToDb(order: WorkOrder, taxRate = 19): DbWorkOrderRow
       promisedAt = parsed.toISOString();
     }
   }
+
+  const deliveredAt =
+    order.status === 'delivered'
+      ? order.delivered_at || order.updated_at || new Date().toISOString()
+      : null;
 
   // Note: balance_due is NEVER sent because PostgreSQL computes it as GENERATED ALWAYS STORED
   return {
@@ -399,7 +457,15 @@ export function mapWorkOrderToDb(order: WorkOrder, taxRate = 19): DbWorkOrderRow
     warranty_days: Number(order.warranty_days ?? 90),
     received_at: order.created_at || new Date().toISOString(),
     promised_at: promisedAt,
+    delivered_at: deliveredAt,
   };
+}
+
+export function stripOptionalWorkOrderColumns<T extends object>(
+  row: T
+): Omit<T, 'delivered_at'> {
+  const { delivered_at: _da, ...base } = row as T & { delivered_at?: unknown };
+  return base as Omit<T, 'delivered_at'>;
 }
 
 interface DbAppointmentRow {
@@ -418,10 +484,15 @@ interface DbAppointmentRow {
 }
 
 export function mapAppointmentToDb(apt: Appointment): DbAppointmentRow {
-  const descriptionParts = [
-    apt.technician ? `Técnico: ${apt.technician}` : '',
-    apt.notes ?? '',
-  ].filter(Boolean);
+  const tech = apt.technician.trim();
+  const notes = (apt.notes ?? '').trim();
+  const description =
+    tech || notes
+      ? JSON.stringify({
+          ...(tech ? { technician: tech } : {}),
+          ...(notes ? { notes } : {}),
+        })
+      : null;
 
   return {
     id: ensureUUID(apt.id),
@@ -430,7 +501,7 @@ export function mapAppointmentToDb(apt: Appointment): DbAppointmentRow {
     client_id: ensureUUID(apt.client_id),
     work_order_id: apt.work_order_id ? ensureUUID(apt.work_order_id) : null,
     subject: apt.subject,
-    description: descriptionParts.length ? descriptionParts.join(' — ') : null,
+    description,
     scheduled_start: buildIsoTimestamp(apt.date, apt.start_time),
     scheduled_end: buildIsoTimestamp(apt.date, apt.end_time),
     modality: apt.modality,
@@ -576,7 +647,7 @@ function derivePhotoStoragePath(url: string): string {
     const extracted = url.slice(idx + marker.length).trim();
     if (extracted) return extracted;
   }
-  return 'demo';
+  return 'external';
 }
 
 export function mapWorkOrderPhotoToDb(
@@ -657,6 +728,7 @@ export function mapTenantFromDb(row: Record<string, unknown>): Tenant {
         : row.legal_terms != null
         ? String(row.legal_terms)
         : undefined,
+    logo_url: row.logo_url != null ? String(row.logo_url) : null,
     created_at: String(row.created_at ?? new Date().toISOString()),
   };
 }
@@ -671,6 +743,7 @@ export function mapBranchFromDb(row: Record<string, unknown>): Branch {
     address: String(row.address ?? ''),
     city: String(row.city ?? ''),
     phone: String(row.phone ?? ''),
+    email: row.email != null ? String(row.email) : undefined,
     business_hours: String(row.business_hours ?? 'Lun-Vie 09:00 - 18:30'),
   };
 }
@@ -802,6 +875,7 @@ export function mapWorkOrderFromDb(
     warranty_days: row.warranty_days != null ? Number(row.warranty_days) : 90,
     legacy_mdb_id:
       row.legacy_mdb_id != null ? String(row.legacy_mdb_id) : undefined,
+    delivered_at: row.delivered_at != null ? String(row.delivered_at) : null,
     created_at: String(
       row.received_at ?? row.created_at ?? new Date().toISOString()
     ),
@@ -826,10 +900,32 @@ export function mapAppointmentFromDb(row: Record<string, unknown>): Appointment 
   const desc = row.description != null ? String(row.description) : '';
   let technician = row.technician != null ? String(row.technician) : '';
   let notes = row.notes != null ? String(row.notes) : desc;
-  if (!technician && desc.startsWith('Técnico: ')) {
-    const [techPart, ...rest] = desc.split(' — ');
-    technician = techPart.replace('Técnico: ', '').trim();
-    notes = rest.join(' — ');
+  if (desc.startsWith('{') && desc.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(desc) as {
+        technician?: unknown;
+        notes?: unknown;
+      };
+      if (parsed && typeof parsed === 'object') {
+        if (!technician && typeof parsed.technician === 'string') {
+          technician = parsed.technician;
+        }
+        if (row.notes == null) {
+          notes = typeof parsed.notes === 'string' ? parsed.notes : '';
+        }
+      }
+    } catch {
+      // Fall through to legacy delimiter parser
+    }
+  } else if (!technician && desc.startsWith('Técnico: ')) {
+    const sepIdx = desc.indexOf(' — ');
+    if (sepIdx !== -1) {
+      technician = desc.slice('Técnico: '.length, sepIdx).trim();
+      notes = desc.slice(sepIdx + 3);
+    } else {
+      technician = desc.replace('Técnico: ', '').trim();
+      notes = '';
+    }
   }
 
   return {
@@ -943,6 +1039,79 @@ export function mapOrderLoanFromDb(
     returned_at:
       row.returned_at != null ? String(row.returned_at) : undefined,
     delivery_notes: String(row.condition_on_loan ?? row.delivery_notes ?? ''),
+  };
+}
+
+export function mapPublicRpcOrderToTrackData(
+  rawInput: unknown
+): PublicOrderTrackData | null {
+  const row = (Array.isArray(rawInput) ? rawInput[0] : rawInput) as Record<
+    string,
+    unknown
+  > | null;
+  if (!row || typeof row !== 'object') return null;
+
+  const folio = row.folio != null ? String(row.folio) : '';
+  const trackingCode = row.tracking_code != null ? String(row.tracking_code) : '';
+  if (!folio && !trackingCode) return null;
+
+  const rawItems = Array.isArray(row.items)
+    ? (row.items as Array<Record<string, unknown>>)
+    : [];
+  const rawPhotos = Array.isArray(row.photos)
+    ? (row.photos as Array<Record<string, unknown>>)
+    : [];
+
+  return {
+    folio,
+    tracking_code: trackingCode,
+    status: (row.status as OrderStatus) ?? 'received',
+    modality:
+      row.modality === 'home_service' ? 'home_service' : 'workshop',
+    company_name: String(row.company_name ?? 'FixiCloud'),
+    company_logo: row.company_logo != null ? String(row.company_logo) : null,
+    currency: String(row.currency ?? 'CLP'),
+    branch_name: String(row.branch_name ?? 'Casa Matriz'),
+    branch_address:
+      row.branch_address != null ? String(row.branch_address) : undefined,
+    branch_phone:
+      row.branch_phone != null ? String(row.branch_phone) : undefined,
+    client_name: String(row.client_name ?? 'Cliente'),
+    asset_category: String(row.asset_category ?? 'Equipo'),
+    brand: String(row.brand ?? ''),
+    model: String(row.model ?? ''),
+    serial_number: String(row.serial_number ?? ''),
+    accessories_received: String(row.accessories_received ?? ''),
+    reported_symptoms: String(row.reported_symptoms ?? ''),
+    technical_diagnosis: String(row.technical_diagnosis ?? ''),
+    work_performed: String(row.work_performed ?? ''),
+    parts_and_observations: String(row.parts_and_observations ?? ''),
+    items: rawItems.map((it) => ({
+      description: String(it.description ?? ''),
+      quantity: Number(it.quantity ?? it.qty ?? 1) || 1,
+      total: Number(it.total ?? it.total_price ?? 0) || 0,
+    })),
+    total_amount: Number(row.total_amount ?? 0) || 0,
+    paid_amount: Number(row.paid_amount ?? 0) || 0,
+    balance_due: Number(row.balance_due ?? 0) || 0,
+    photos: rawPhotos.map((ph, idx) => {
+      const stage: PhotoStage =
+        ph.stage === 'reception' || ph.stage === 'delivery'
+          ? ph.stage
+          : 'diagnosis';
+      return {
+        id: String(ph.id ?? `rpc-photo-${idx}`),
+        url: String(ph.url ?? ph.public_url ?? ''),
+        stage,
+        caption: String(ph.caption ?? 'Evidencia del taller'),
+      };
+    }),
+    received_at:
+      row.received_at != null ? String(row.received_at) : undefined,
+    promised_at:
+      row.promised_at != null ? String(row.promised_at) : null,
+    delivered_at:
+      row.delivered_at != null ? String(row.delivered_at) : null,
   };
 }
 

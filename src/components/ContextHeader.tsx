@@ -7,6 +7,7 @@ import {
   LogIn,
   MapPin,
   Menu,
+  RefreshCw,
   Search,
   UserCheck,
   X,
@@ -31,6 +32,8 @@ interface ContextHeaderProps {
   onSubmitGlobalSearch: (q: string) => void;
   authSession: AuthSessionUser | null;
   onOpenAuthModal: () => void;
+  onRefreshSync?: () => void;
+  isSyncing?: boolean;
   lowStockItems: CatalogItem[];
   readyOrders: WorkOrder[];
   scheduledAppointments: Appointment[];
@@ -60,6 +63,8 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
   onSubmitGlobalSearch,
   authSession,
   onOpenAuthModal,
+  onRefreshSync,
+  isSyncing = false,
   lowStockItems,
   readyOrders,
   scheduledAppointments,
@@ -125,7 +130,7 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
           </div>
         </div>
 
-        {/* Right: Global Search + Notification Bell + Supabase/Demo Status */}
+        {/* Right: Global Search + Notification Bell + User Session */}
         <div className="flex items-center gap-2 w-full lg:w-auto justify-end min-w-0">
           <form
             onSubmit={handleSearchSubmit}
@@ -151,6 +156,26 @@ export const ContextHeader: React.FC<ContextHeaderProps> = ({
               </button>
             )}
           </form>
+
+          {onRefreshSync && (
+            <button
+              type="button"
+              onClick={onRefreshSync}
+              disabled={isSyncing}
+              title="Sincronizar datos desde Supabase"
+              aria-label="Sincronizar datos"
+              className="inline-flex items-center gap-1.5 rounded-full border border-[#D8E4EC] bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-white hover:border-[#3E92CC] hover:text-[#0A2463] disabled:opacity-60 transition-colors shrink-0"
+            >
+              <RefreshCw
+                className={`h-3.5 w-3.5 text-[#3E92CC] ${
+                  isSyncing ? 'animate-spin' : ''
+                }`}
+              />
+              <span className="hidden md:inline">
+                {isSyncing ? 'Sincronizando...' : 'Sincronizar'}
+              </span>
+            </button>
+          )}
 
           {/* Notification Bell with Live Alert Popover */}
           <div className="relative shrink-0">

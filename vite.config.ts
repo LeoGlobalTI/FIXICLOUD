@@ -8,7 +8,7 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {
@@ -27,7 +27,6 @@ export default defineConfig(() => {
               if (id.includes('@supabase/supabase-js')) return 'supabase';
               if (id.includes('lucide-react')) return 'icons';
             }
-            if (id.includes('/src/data/seedData')) return 'seed-data';
           },
         },
       },

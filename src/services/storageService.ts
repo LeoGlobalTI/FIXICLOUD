@@ -1,11 +1,21 @@
 import type { AuthSessionUser, ErpState, SupabaseConfig } from '../types/erp';
-import { SEED_ERP_STATE } from '../data/seedData';
-import { mergeMissingSeedTenants } from '../utils/erpLogic';
 import { hasLegacyNonUuidIds } from '../utils/supabaseMappers';
 import { isValidUUID } from '../utils/uuid';
 
 const ERP_STATE_KEY = 'fixicloud_erp_state_v1';
 const AUTH_SESSION_KEY = 'fixicloud_auth_session_v1';
+
+export const EMPTY_ERP_STATE: ErpState = {
+  tenants: [],
+  branches: [],
+  appUsers: [],
+  clients: [],
+  assets: [],
+  catalogItems: [],
+  loanAssets: [],
+  workOrders: [],
+  appointments: [],
+};
 
 function getEnvSupabaseCredentials(): {
   url: string;
@@ -38,28 +48,25 @@ function getEnvSupabaseCredentials(): {
 export function loadErpState(): ErpState {
   try {
     const raw = localStorage.getItem(ERP_STATE_KEY);
-    if (!raw) {
-      localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
-      return SEED_ERP_STATE;
+    if (!raw) return EMPTY_ERP_STATE;
+    const parsed = JSON.parse(raw) as Partial<ErpState>;
+    if (!parsed || !Array.isArray(parsed.tenants) || hasLegacyNonUuidIds(parsed)) {
+      localStorage.removeItem(ERP_STATE_KEY);
+      return EMPTY_ERP_STATE;
     }
-    const parsed = JSON.parse(raw) as ErpState;
-    if (!parsed.tenants?.length || !parsed.workOrders || hasLegacyNonUuidIds(parsed)) {
-      localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
-      return SEED_ERP_STATE;
-    }
-    const normalized: ErpState = {
-      ...parsed,
-      appUsers: parsed.appUsers?.length ? parsed.appUsers : SEED_ERP_STATE.appUsers,
-      appointments: parsed.appointments ?? SEED_ERP_STATE.appointments,
+    return {
+      tenants: parsed.tenants ?? [],
+      branches: parsed.branches ?? [],
+      appUsers: parsed.appUsers ?? [],
+      clients: parsed.clients ?? [],
+      assets: parsed.assets ?? [],
+      catalogItems: parsed.catalogItems ?? [],
+      loanAssets: parsed.loanAssets ?? [],
+      workOrders: parsed.workOrders ?? [],
+      appointments: parsed.appointments ?? [],
     };
-    const merged = mergeMissingSeedTenants(normalized, SEED_ERP_STATE);
-    if (merged.changed) {
-      localStorage.setItem(ERP_STATE_KEY, JSON.stringify(merged.state));
-    }
-    return merged.state;
   } catch {
-    localStorage.setItem(ERP_STATE_KEY, JSON.stringify(SEED_ERP_STATE));
-    return SEED_ERP_STATE;
+    return EMPTY_ERP_STATE;
   }
 }
 
@@ -80,6 +87,14 @@ export function saveErpState(
   }
 }
 
+export function clearErpState(): void {
+  try {
+    localStorage.removeItem(ERP_STATE_KEY);
+  } catch {
+    // Ignore
+  }
+}
+
 export function loadSupabaseConfig(): SupabaseConfig {
   const envCreds = getEnvSupabaseCredentials();
   if (envCreds.url && envCreds.anonKey) {
@@ -87,7 +102,6 @@ export function loadSupabaseConfig(): SupabaseConfig {
       url: envCreds.url,
       anonKey: envCreds.anonKey,
       connected: true,
-      demoMode: false,
       source: 'env',
     };
   }
@@ -96,7 +110,6 @@ export function loadSupabaseConfig(): SupabaseConfig {
     url: envCreds.url,
     anonKey: '',
     connected: false,
-    demoMode: true,
     source: 'none',
     lastError: envCreds.hasSecretKeyMistake
       ? 'La variable VITE_SUPABASE_ANON_KEY tiene una clave secreta (sb_secret_...). Reemplázala por la clave pública (sb_publishable_...) en las variables de entorno.'
@@ -138,36 +151,3 @@ export function saveAuthSession(user: AuthSessionUser | null): void {
     // Ignore
   }
 }
-
-const SYNCED_SEED_TENANTS_KEY = 'fixicloud_synced_seed_tenants_v1';
-
-export function getSyncedSeedTenantsForUrl(url: string): string[] {
-  const cleanUrl = url.trim().replace(/\/+$/, '');
-  if (!cleanUrl) return [];
-  try {
-    const raw = localStorage.getItem(SYNCED_SEED_TENANTS_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw) as Record<string, string[]>;
-    return Array.isArray(parsed[cleanUrl]) ? parsed[cleanUrl] : [];
-  } catch {
-    return [];
-  }
-}
-
-export function markSeedTenantsSyncedForUrl(
-  url: string,
-  tenantIds: string[]
-): void {
-  const cleanUrl = url.trim().replace(/\/+$/, '');
-  if (!cleanUrl || tenantIds.length === 0) return;
-  try {
-    const raw = localStorage.getItem(SYNCED_SEED_TENANTS_KEY);
-    const parsed = raw ? (JSON.parse(raw) as Record<string, string[]>) : {};
-    const merged = new Set([...(parsed[cleanUrl] ?? []), ...tenantIds]);
-    parsed[cleanUrl] = Array.from(merged);
-    localStorage.setItem(SYNCED_SEED_TENANTS_KEY, JSON.stringify(parsed));
-  } catch {
-    // Ignore
-  }
-}
-

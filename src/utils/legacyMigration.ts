@@ -5,7 +5,7 @@ import type {
   OrderStatus,
   WorkOrder,
 } from '../types/erp';
-import { generateNextFolio, generateTrackingCode } from './erpLogic';
+import { generateNextFolio, generateTrackingCode, getLocalIsoDate } from './erpLogic';
 import { generateUUID } from './uuid';
 
 export interface LegacyMdbRecord {
@@ -41,87 +41,46 @@ export interface MigrationPreviewRow {
   matchedPhotos: LegacyPhotoUpload[];
 }
 
-export const SIMULATED_MDB_RECORDS: LegacyMdbRecord[] = [
-  {
-    legacyId: 'FX-4012',
-    clientName: 'María Fernanda Rojas',
-    clientRut: '17.654.321-9',
-    clientPhone: '+56 9 8412 3390',
-    clientAddress: 'Calle Estado 340, Depto 402',
-    clientCity: 'Rancagua',
-    category: 'Notebook',
-    brand: 'Dell',
-    model: 'Inspiron 15 3520',
-    serialImei: 'DL3520-8812A',
-    symptoms: 'Teclado con teclas pegadas por derrame de café y batería inflada.',
-    diagnosis: 'Cortocircuito en matriz de teclado y celda de batería degradada.',
-    partsAndObs: 'Reemplazo teclado español retroiluminado + batería 42Wh OEM.',
-    totalAmount: 95000,
-    paidAmount: 95000,
-    entryDate: '2025-11-18',
-    status: 'delivered',
-  },
-  {
-    legacyId: 'FX-4013',
-    clientName: 'Transportes del Cachapoal Ltda.',
-    clientRut: '76.332.890-1',
-    clientPhone: '+56 9 9120 5544',
-    clientAddress: 'Ruta 5 Sur Km 85, Galpón 2',
-    clientCity: 'Rancagua',
-    category: 'Impresora Láser',
-    brand: 'Brother',
-    model: 'MFC-L2710DW',
-    serialImei: 'BR-U64910J9N',
-    symptoms: 'Atasco constante de papel en bandeja 1 y manchas negras verticales.',
-    diagnosis: 'Rodillo de tracción gastado y película de fusor rasgada.',
-    partsAndObs: 'Kit fusor + goma pick-up roller reemplazados. Garantía 60 días.',
-    totalAmount: 68000,
-    paidAmount: 30000,
-    entryDate: '2025-12-03',
-    status: 'ready',
-  },
-  {
-    legacyId: 'FX-4014',
-    clientName: 'Andrés Morales Vega',
-    clientRut: '14.889.201-4',
-    clientPhone: '+56 9 7834 1102',
-    clientAddress: 'Pasaje Los Álamos 78',
-    clientCity: 'Machalí',
-    category: 'PC Escritorio',
-    brand: 'HP',
-    model: 'ProDesk 400 G7',
-    serialImei: 'MXL14209KL',
-    symptoms: 'No da video al encender, ventilador gira al máximo.',
-    diagnosis: 'Fuente de poder con riel +12V inestable y módulo RAM oxidado.',
-    partsAndObs: 'Cambio fuente 310W + limpieza contactos DIMM.',
-    totalAmount: 54000,
-    paidAmount: 20000,
-    entryDate: '2026-01-09',
-    status: 'in_repair',
-  },
-  {
-    legacyId: 'FX-4015',
-    clientName: 'Transportes del Cachapoal Ltda.',
-    clientRut: '76.332.890-1',
-    clientPhone: '+56 9 9120 5544',
-    clientAddress: 'Ruta 5 Sur Km 85, Galpón 2',
-    clientCity: 'Rancagua',
-    category: 'Notebook',
-    brand: 'Lenovo',
-    model: 'IdeaPad 3 15ALC6',
-    serialImei: 'PF2Y7710',
-    symptoms: 'Jack de carga suelto y no carga batería.',
-    diagnosis: 'Conector DC Jack desoldado de placa madre.',
-    partsAndObs: 'Soldadura nueva de conector DC + refuerzo epóxico.',
-    totalAmount: 42000,
-    paidAmount: 0,
-    entryDate: '2026-01-22',
-    status: 'waiting_approval',
-  },
-];
+function normalizeText(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
 
-function normalizeText(value: string): string {
-  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+export function normalizeLegacyDate(raw: unknown): string {
+  const fallback = getLocalIsoDate();
+  const str = String(raw ?? '').trim();
+  if (!str) return fallback;
+
+  // YYYY-MM-DD or ISO timestamp
+  const ymd = str.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (ymd) {
+    const [, y, m, d] = ymd;
+    const candidate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    const parsed = new Date(`${candidate}T12:00:00Z`);
+    if (!Number.isNaN(parsed.getTime()) && Number(m) >= 1 && Number(m) <= 12 && Number(d) >= 1 && Number(d) <= 31) {
+      return candidate;
+    }
+  }
+
+  // DD/MM/YYYY or DD-MM-YYYY
+  const dmy = str.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})/);
+  if (dmy) {
+    const [, d, m, y] = dmy;
+    const monthNum = Number(m);
+    const dayNum = Number(d);
+    if (monthNum >= 1 && monthNum <= 12 && dayNum >= 1 && dayNum <= 31) {
+      const candidate = `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+      const parsed = new Date(`${candidate}T12:00:00Z`);
+      if (!Number.isNaN(parsed.getTime())) {
+        return candidate;
+      }
+    }
+  }
+
+  const parsed = new Date(str);
+  if (!Number.isNaN(parsed.getTime())) {
+    return getLocalIsoDate(parsed);
+  }
+  return fallback;
 }
 
 function normalizePhone(value: string): string {
@@ -213,7 +172,7 @@ export function parseLegacyCsv(csvText: string): LegacyMdbRecord[] {
       partsAndObs: iRep >= 0 ? cols[iRep] : '',
       totalAmount: Number((iTot >= 0 ? cols[iTot] : '0').replace(/[^\d.-]/g, '')) || 0,
       paidAmount: Number((iAbo >= 0 ? cols[iAbo] : '0').replace(/[^\d.-]/g, '')) || 0,
-      entryDate: (iFec >= 0 ? cols[iFec] : '') || new Date().toISOString().slice(0, 10),
+      entryDate: normalizeLegacyDate(iFec >= 0 ? cols[iFec] : ''),
       status: mapLegacyStatus(iEst >= 0 ? cols[iEst] : 'delivered'),
     });
   }
@@ -264,9 +223,9 @@ export function scanMdbBinaryStrings(buffer: ArrayBuffer): {
   const combined = Array.from(new Set([...asciiMatches, ...utf16Sample])).slice(0, 24);
 
   return {
-    detectedTables: detectedTables.length > 0 ? detectedTables : ['Reparaciones', 'Clientes', 'Agenda'],
+    detectedTables,
     extractedStringsSample: combined,
-    records: SIMULATED_MDB_RECORDS,
+    records: [],
   };
 }
 
@@ -393,7 +352,8 @@ export function executeLegacyMigration(
     createdAssetsList.push(asset);
 
     const folio = generateNextFolio(prefix, nextOrders, options.tenantId);
-    const createdIso = `${rec.entryDate}T10:00:00Z`;
+    const normalizedEntryDate = normalizeLegacyDate(rec.entryDate);
+    const createdIso = `${normalizedEntryDate}T10:00:00Z`;
     const photos = row.matchedPhotos.map((ph) => {
       attachedPhotos++;
       return {
@@ -441,7 +401,7 @@ export function executeLegacyMigration(
           ? [
               {
                 id: generateUUID(),
-                date: rec.entryDate,
+                date: normalizedEntryDate,
                 amount: rec.paidAmount,
                 method: 'cash',
                 reference: rec.legacyId,

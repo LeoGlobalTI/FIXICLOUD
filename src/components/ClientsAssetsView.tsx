@@ -1,8 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Check, Laptop, Pencil, Plus, Search, User, Wrench } from 'lucide-react';
+import { Check, Laptop, Pencil, Plus, Search, Trash2, User, Wrench, X } from 'lucide-react';
 import type { Client, CustomerAsset, RoleType, Tenant, WorkOrder } from '../types/erp';
-import { getRolePermissions, ORDER_STATUS_META } from '../utils/erpLogic';
+import {
+  getDefaultAssetCategoryForSector,
+  getRolePermissions,
+  ORDER_STATUS_META,
+} from '../utils/erpLogic';
 import { generateUUID } from '../utils/uuid';
+import { AlertBanner } from './ui/AlertBanner';
 
 interface ClientsAssetsViewProps {
   tenant: Tenant;
@@ -10,8 +15,12 @@ interface ClientsAssetsViewProps {
   clients: Client[];
   assets: CustomerAsset[];
   orders: WorkOrder[];
-  onAddClient: (client: Client) => void;
-  onUpdateClient: (client: Client) => void;
+  onAddClient: (client: Client) => Promise<{ ok: boolean; error?: string }> | void;
+  onUpdateClient: (client: Client) => Promise<{ ok: boolean; error?: string }> | void;
+  onDeleteClient: (clientId: string) => Promise<{ ok: boolean; error?: string }>;
+  onAddAsset: (asset: CustomerAsset) => Promise<{ ok: boolean; error?: string }> | void;
+  onUpdateAsset: (asset: CustomerAsset) => Promise<{ ok: boolean; error?: string }>;
+  onDeleteAsset: (assetId: string) => Promise<{ ok: boolean; error?: string }>;
   onOpenOrder: (orderId: string) => void;
 }
 
@@ -23,6 +32,10 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
   orders,
   onAddClient,
   onUpdateClient,
+  onDeleteClient,
+  onAddAsset,
+  onUpdateAsset,
+  onDeleteAsset,
   onOpenOrder,
 }) => {
   const perms = getRolePermissions(activeRole);
@@ -48,6 +61,30 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
     city: '',
   });
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [errorNotice, setErrorNotice] = useState<string | null>(null);
+  const [confirmDeleteClientId, setConfirmDeleteClientId] = useState<string | null>(null);
+  const [deletingClientId, setDeletingClientId] = useState<string | null>(null);
+
+  // Asset add/edit/delete state
+  const [showNewAsset, setShowNewAsset] = useState(false);
+  const [newAssetDraft, setNewAssetDraft] = useState({
+    category: getDefaultAssetCategoryForSector(tenant.sector),
+    brand: '',
+    model: '',
+    serial_imei: '',
+    password_pattern: '',
+  });
+  const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
+  const [editAssetDraft, setEditAssetDraft] = useState({
+    category: '',
+    brand: '',
+    model: '',
+    serial_imei: '',
+    password_pattern: '',
+  });
+  const [savingAsset, setSavingAsset] = useState(false);
+  const [confirmDeleteAssetId, setConfirmDeleteAssetId] = useState<string | null>(null);
+  const [deletingAssetId, setDeletingAssetId] = useState<string | null>(null);
 
   const assetsByClient = useMemo(() => {
     const map = new Map<string, CustomerAsset[]>();
@@ -107,7 +144,12 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
 
   useEffect(() => {
     setEditingClient(false);
+    setConfirmDeleteClientId(null);
+    setShowNewAsset(false);
+    setEditingAssetId(null);
+    setConfirmDeleteAssetId(null);
     setSavedNotice(null);
+    setErrorNotice(null);
     if (activeClient) {
       setEditDraft({
         name: activeClient.name,
@@ -120,13 +162,25 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
     }
   }, [activeClient?.id]);
 
+  useEffect(() => {
+    setNewAssetDraft({
+      category: getDefaultAssetCategoryForSector(tenant.sector),
+      brand: '',
+      model: '',
+      serial_imei: '',
+      password_pattern: '',
+    });
+  }, [tenant.id, tenant.sector]);
+
   const activeClientAssets = activeClient
     ? assetsByClient.get(activeClient.id) ?? []
     : [];
 
-  const handleCreateClient = (e: React.FormEvent) => {
+  const handleCreateClient = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!perms.canManageClients || !name.trim()) return;
+    setErrorNotice(null);
+    setSavedNotice(null);
     const newClient: Client = {
       id: generateUUID(),
       tenant_id: tenant.id,
@@ -137,7 +191,11 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
       address: address.trim(),
       city: city.trim() || 'Santiago',
     };
-    onAddClient(newClient);
+    const res = await onAddClient(newClient);
+    if (res && !res.ok) {
+      setErrorNotice(res.error ?? 'No se pudo registrar el cliente.');
+      return;
+    }
     setSelectedClientId(newClient.id);
     setName('');
     setRut('');
@@ -146,12 +204,15 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
     setAddress('');
     setCity('');
     setShowCreate(false);
+    setSavedNotice(`Cliente "${newClient.name}" registrado.`);
   };
 
-  const handleSaveClientEdit = (e: React.FormEvent) => {
+  const handleSaveClientEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!perms.canManageClients || !activeClient || !editDraft.name.trim()) return;
-    onUpdateClient({
+    setErrorNotice(null);
+    setSavedNotice(null);
+    const res = await onUpdateClient({
       ...activeClient,
       name: editDraft.name.trim(),
       rut: editDraft.rut.trim() || 'S/R',
@@ -160,8 +221,121 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
       address: editDraft.address.trim(),
       city: editDraft.city.trim(),
     });
+    if (res && !res.ok) {
+      setErrorNotice(res.error ?? 'No se pudo actualizar el cliente.');
+      return;
+    }
     setEditingClient(false);
     setSavedNotice('Datos del cliente actualizados.');
+  };
+
+  const handleConfirmDeleteClient = async (client: Client) => {
+    setErrorNotice(null);
+    setSavedNotice(null);
+    setDeletingClientId(client.id);
+    const res = await onDeleteClient(client.id);
+    setDeletingClientId(null);
+    setConfirmDeleteClientId(null);
+    if (!res.ok) {
+      setErrorNotice(res.error ?? 'No se pudo eliminar el cliente.');
+      return;
+    }
+    if (selectedClientId === client.id) setSelectedClientId(null);
+    setSavedNotice(`Cliente "${client.name}" eliminado.`);
+  };
+
+  const handleCreateAsset = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!perms.canManageClients || !activeClient) return;
+    if (!newAssetDraft.brand.trim() || !newAssetDraft.model.trim()) {
+      setErrorNotice('Marca y modelo son obligatorios para registrar un equipo.');
+      return;
+    }
+    setErrorNotice(null);
+    setSavedNotice(null);
+    setSavingAsset(true);
+    const res = await onAddAsset({
+      id: generateUUID(),
+      tenant_id: tenant.id,
+      client_id: activeClient.id,
+      category:
+        newAssetDraft.category.trim() || getDefaultAssetCategoryForSector(tenant.sector),
+      brand: newAssetDraft.brand.trim(),
+      model: newAssetDraft.model.trim(),
+      serial_imei: newAssetDraft.serial_imei.trim() || 'S/N-PENDIENTE',
+      password_pattern: newAssetDraft.password_pattern.trim() || undefined,
+      custom_attributes: {},
+    });
+    setSavingAsset(false);
+    if (res && !res.ok) {
+      setErrorNotice(res.error ?? 'No se pudo registrar el equipo.');
+      return;
+    }
+    setNewAssetDraft({
+      category: getDefaultAssetCategoryForSector(tenant.sector),
+      brand: '',
+      model: '',
+      serial_imei: '',
+      password_pattern: '',
+    });
+    setShowNewAsset(false);
+    setSavedNotice('Equipo agregado al parque del cliente.');
+  };
+
+  const openEditAsset = (asset: CustomerAsset) => {
+    setErrorNotice(null);
+    setSavedNotice(null);
+    setConfirmDeleteAssetId(null);
+    setEditingAssetId(asset.id);
+    setEditAssetDraft({
+      category: asset.category,
+      brand: asset.brand,
+      model: asset.model,
+      serial_imei: asset.serial_imei,
+      password_pattern: asset.password_pattern ?? '',
+    });
+  };
+
+  const handleSaveAssetEdit = async (e: React.FormEvent, asset: CustomerAsset) => {
+    e.preventDefault();
+    if (!perms.canManageClients) return;
+    if (!editAssetDraft.brand.trim() || !editAssetDraft.model.trim()) {
+      setErrorNotice('Marca y modelo son obligatorios.');
+      return;
+    }
+    setErrorNotice(null);
+    setSavedNotice(null);
+    setSavingAsset(true);
+    const res = await onUpdateAsset({
+      ...asset,
+      category: editAssetDraft.category.trim() || asset.category,
+      brand: editAssetDraft.brand.trim(),
+      model: editAssetDraft.model.trim(),
+      serial_imei: editAssetDraft.serial_imei.trim() || 'S/N-PENDIENTE',
+      password_pattern: editAssetDraft.password_pattern.trim() || undefined,
+    });
+    setSavingAsset(false);
+    if (!res.ok) {
+      setErrorNotice(res.error ?? 'No se pudo actualizar el equipo.');
+      return;
+    }
+    setEditingAssetId(null);
+    setSavedNotice('Datos del equipo actualizados.');
+  };
+
+  const handleConfirmDeleteAsset = async (asset: CustomerAsset) => {
+    setErrorNotice(null);
+    setSavedNotice(null);
+    setDeletingAssetId(asset.id);
+    const res = await onDeleteAsset(asset.id);
+    setDeletingAssetId(null);
+    setConfirmDeleteAssetId(null);
+    if (!res.ok) {
+      setErrorNotice(res.error ?? 'No se pudo eliminar el equipo.');
+      return;
+    }
+    if (editingAssetId === asset.id) setEditingAssetId(null);
+    setSavedNotice(`Equipo ${asset.brand} ${asset.model} eliminado.`);
   };
 
   return (
@@ -189,6 +363,22 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
           </button>
         )}
       </div>
+
+      {errorNotice && (
+        <AlertBanner
+          variant="error"
+          message={errorNotice}
+          onDismiss={() => setErrorNotice(null)}
+        />
+      )}
+
+      {savedNotice && (
+        <AlertBanner
+          variant="success"
+          message={savedNotice}
+          onDismiss={() => setSavedNotice(null)}
+        />
+      )}
 
       {perms.canManageClients && showCreate && (
         <form
@@ -326,7 +516,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
           ) : (
             <>
               <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 space-y-4">
-                <div className="flex items-start justify-between gap-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex items-start gap-3 min-w-0">
                     <div className="h-11 w-11 rounded-xl bg-[#0A2463] text-white flex items-center justify-center shrink-0">
                       <User className="h-5 w-5 text-[#6EC1F8]" />
@@ -355,25 +545,56 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                     </div>
                   </div>
                   {perms.canManageClients && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSavedNotice(null);
-                        setEditingClient((v) => !v);
-                      }}
-                      className="inline-flex items-center gap-1.5 rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-[#0A2463] shrink-0 transition-colors"
-                    >
-                      <Pencil className="h-3.5 w-3.5 text-[#3E92CC]" />
-                      <span>{editingClient ? 'Cancelar' : 'Editar Cliente'}</span>
-                    </button>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSavedNotice(null);
+                          setErrorNotice(null);
+                          setEditingClient((v) => !v);
+                        }}
+                        className="inline-flex items-center gap-1.5 rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-[#0A2463] transition-colors"
+                      >
+                        <Pencil className="h-3.5 w-3.5 text-[#3E92CC]" />
+                        <span>{editingClient ? 'Cancelar' : 'Editar Cliente'}</span>
+                      </button>
+
+                      {confirmDeleteClientId === activeClient.id ? (
+                        <div className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            disabled={deletingClientId === activeClient.id}
+                            onClick={() => setConfirmDeleteClientId(null)}
+                            className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 px-1.5"
+                          >
+                            Cancelar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingClientId === activeClient.id}
+                            onClick={() => void handleConfirmDeleteClient(activeClient)}
+                            className="rounded-xl bg-[#D64545] hover:bg-red-700 disabled:opacity-50 px-3 py-1.5 text-xs font-semibold text-white transition-colors"
+                          >
+                            {deletingClientId === activeClient.id ? 'Eliminando...' : 'Confirmar'}
+                          </button>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setErrorNotice(null);
+                            setSavedNotice(null);
+                            setConfirmDeleteClientId(activeClient.id);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 px-3 py-1.5 text-xs font-semibold text-[#D64545] transition-colors"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          <span>Eliminar</span>
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
-
-                {savedNotice && (
-                  <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 px-3 py-2 text-xs font-semibold text-[#157A6E]">
-                    {savedNotice}
-                  </div>
-                )}
 
                 {perms.canManageClients && editingClient && (
                   <form
@@ -451,9 +672,115 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
               </div>
 
               <div className="space-y-3">
-                <h3 className="text-xs font-semibold text-slate-700 px-1">
-                  Parque de Equipos e Historial por N° de Serie ({activeClientAssets.length})
-                </h3>
+                <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                  <h3 className="text-xs font-semibold text-slate-700">
+                    Parque de Equipos e Historial por N° de Serie ({activeClientAssets.length})
+                  </h3>
+                  {perms.canManageClients && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setErrorNotice(null);
+                        setSavedNotice(null);
+                        setShowNewAsset((v) => !v);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-xl border border-[#D8E4EC] bg-white hover:bg-[#F4F6FB] px-3 py-1.5 text-[11px] font-semibold text-[#0A2463] transition-colors"
+                    >
+                      <Plus className="h-3.5 w-3.5 text-[#3E92CC]" />
+                      <span>Agregar Equipo</span>
+                    </button>
+                  )}
+                </div>
+
+                {perms.canManageClients && showNewAsset && (
+                  <form
+                    onSubmit={handleCreateAsset}
+                    className="rounded-2xl bg-white border border-[#3E92CC]/40 shadow-sm p-4 space-y-3"
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-[#0A2463]">
+                        Nuevo Equipo para {activeClient.name}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setShowNewAsset(false)}
+                        aria-label="Cerrar formulario nuevo equipo"
+                        className="rounded-lg p-1 text-slate-400 hover:text-slate-700"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <input
+                        type="text"
+                        value={newAssetDraft.category}
+                        onChange={(e) =>
+                          setNewAssetDraft((d) => ({ ...d, category: e.target.value }))
+                        }
+                        placeholder="Categoría"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        required
+                        value={newAssetDraft.brand}
+                        onChange={(e) =>
+                          setNewAssetDraft((d) => ({ ...d, brand: e.target.value }))
+                        }
+                        placeholder="Marca *"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        required
+                        value={newAssetDraft.model}
+                        onChange={(e) =>
+                          setNewAssetDraft((d) => ({ ...d, model: e.target.value }))
+                        }
+                        placeholder="Modelo *"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={newAssetDraft.serial_imei}
+                        onChange={(e) =>
+                          setNewAssetDraft((d) => ({ ...d, serial_imei: e.target.value }))
+                        }
+                        placeholder="N° de Serie / IMEI"
+                        className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                      <input
+                        type="text"
+                        value={newAssetDraft.password_pattern}
+                        onChange={(e) =>
+                          setNewAssetDraft((d) => ({
+                            ...d,
+                            password_pattern: e.target.value,
+                          }))
+                        }
+                        placeholder="Clave / Patrón (opcional)"
+                        className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB]/50 px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex justify-end gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowNewAsset(false)}
+                        className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-[#F4F6FB]"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={savingAsset}
+                        className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 px-4 py-1.5 text-xs font-semibold text-white"
+                      >
+                        {savingAsset ? 'Guardando...' : 'Guardar Equipo'}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
                 {activeClientAssets.length === 0 ? (
                   <div className="rounded-2xl bg-white border border-[#D8E4EC]/70 shadow-sm p-6 text-center text-xs text-slate-500">
                     Este cliente aún no tiene equipos registrados.
@@ -461,6 +788,7 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                 ) : (
                   activeClientAssets.map((asset) => {
                     const assetOrders = ordersByAsset.get(asset.id) ?? [];
+                    const isEditingAsset = editingAssetId === asset.id;
                     return (
                       <div
                         key={asset.id}
@@ -475,10 +803,135 @@ export const ClientsAssetsView: React.FC<ClientsAssetsViewProps> = ({
                               {asset.category} {asset.brand} {asset.model}
                             </span>
                           </div>
-                          <span className="font-mono text-xs font-semibold text-[#0A2463] bg-[#EBF4FA] border border-[#3E92CC]/30 px-2.5 py-0.5 rounded-lg">
-                            S/N: {asset.serial_imei}
-                          </span>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono text-xs font-semibold text-[#0A2463] bg-[#EBF4FA] border border-[#3E92CC]/30 px-2.5 py-0.5 rounded-lg">
+                              S/N: {asset.serial_imei}
+                            </span>
+                            {perms.canManageClients && (
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label={`Editar equipo ${asset.brand} ${asset.model}`}
+                                  onClick={() => openEditAsset(asset)}
+                                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#3E92CC] hover:text-[#0A2463]"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                  <span>Editar</span>
+                                </button>
+                                {confirmDeleteAssetId === asset.id ? (
+                                  <div className="inline-flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      disabled={deletingAssetId === asset.id}
+                                      onClick={() => setConfirmDeleteAssetId(null)}
+                                      className="text-[11px] font-semibold text-slate-600"
+                                    >
+                                      Cancelar
+                                    </button>
+                                    <button
+                                      type="button"
+                                      disabled={deletingAssetId === asset.id}
+                                      onClick={() => void handleConfirmDeleteAsset(asset)}
+                                      className="rounded-lg bg-[#D64545] px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                                    >
+                                      {deletingAssetId === asset.id ? '...' : 'Confirmar'}
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    aria-label={`Eliminar equipo ${asset.brand} ${asset.model}`}
+                                    onClick={() => {
+                                      setErrorNotice(null);
+                                      setSavedNotice(null);
+                                      setConfirmDeleteAssetId(asset.id);
+                                    }}
+                                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#D64545] hover:underline"
+                                  >
+                                    <Trash2 className="h-3 w-3" />
+                                    <span>Eliminar</span>
+                                  </button>
+                                )}
+                              </>
+                            )}
+                          </div>
                         </div>
+
+                        {isEditingAsset && perms.canManageClients && (
+                          <form
+                            onSubmit={(e) => void handleSaveAssetEdit(e, asset)}
+                            className="rounded-xl bg-[#F4F6FB] border border-[#D8E4EC] p-3 space-y-2.5"
+                          >
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              <input
+                                type="text"
+                                value={editAssetDraft.category}
+                                onChange={(e) =>
+                                  setEditAssetDraft((d) => ({ ...d, category: e.target.value }))
+                                }
+                                placeholder="Categoría"
+                                className="rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none"
+                              />
+                              <input
+                                type="text"
+                                required
+                                value={editAssetDraft.brand}
+                                onChange={(e) =>
+                                  setEditAssetDraft((d) => ({ ...d, brand: e.target.value }))
+                                }
+                                placeholder="Marca *"
+                                className="rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none"
+                              />
+                              <input
+                                type="text"
+                                required
+                                value={editAssetDraft.model}
+                                onChange={(e) =>
+                                  setEditAssetDraft((d) => ({ ...d, model: e.target.value }))
+                                }
+                                placeholder="Modelo *"
+                                className="rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none"
+                              />
+                              <input
+                                type="text"
+                                value={editAssetDraft.serial_imei}
+                                onChange={(e) =>
+                                  setEditAssetDraft((d) => ({ ...d, serial_imei: e.target.value }))
+                                }
+                                placeholder="N° Serie / IMEI"
+                                className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-[#3E92CC] focus:outline-none"
+                              />
+                              <input
+                                type="text"
+                                value={editAssetDraft.password_pattern}
+                                onChange={(e) =>
+                                  setEditAssetDraft((d) => ({
+                                    ...d,
+                                    password_pattern: e.target.value,
+                                  }))
+                                }
+                                placeholder="Clave / Patrón"
+                                className="rounded-xl border border-[#D8E4EC] bg-white px-2.5 py-1.5 text-xs font-mono text-slate-900 focus:border-[#3E92CC] focus:outline-none"
+                              />
+                            </div>
+                            <div className="flex justify-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => setEditingAssetId(null)}
+                                className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-1 text-[11px] font-semibold text-slate-700"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                type="submit"
+                                disabled={savingAsset}
+                                className="rounded-xl bg-[#1B998B] hover:bg-[#157A6E] disabled:opacity-50 px-3 py-1 text-[11px] font-semibold text-white"
+                              >
+                                {savingAsset ? 'Guardando...' : 'Guardar Equipo'}
+                              </button>
+                            </div>
+                          </form>
+                        )}
 
                         {Object.keys(asset.custom_attributes).length > 0 && (
                           <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-600">

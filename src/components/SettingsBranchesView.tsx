@@ -40,9 +40,10 @@ interface SettingsBranchesViewProps {
   activeRole: RoleType;
   sessionRole?: RoleType | null;
   currentUserId?: string | null;
+  lockedBranchId?: string | null;
   initialTab?: 'company' | 'users';
-  onUpdateTenant: (tenant: Tenant) => void;
-  onAddBranch: (branch: Branch) => void;
+  onUpdateTenant: (tenant: Tenant) => Promise<{ ok: boolean; error?: string }> | void;
+  onAddBranch: (branch: Branch) => Promise<{ ok: boolean; error?: string }> | void;
   onDeleteBranch: (branchId: string) => Promise<{ ok: boolean; error?: string }>;
   onAddAppUser: (user: AppUser) => Promise<{ ok: boolean; error?: string }>;
   onUpdateAppUser: (user: AppUser) => Promise<{ ok: boolean; error?: string }>;
@@ -57,6 +58,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   activeRole,
   sessionRole,
   currentUserId,
+  lockedBranchId,
   initialTab = 'company',
   onUpdateTenant,
   onAddBranch,
@@ -67,6 +69,8 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
 }) => {
   const perms = getRolePermissions(activeRole);
   const allowGlobalView = canViewGlobalScope(activeRole, sessionRole);
+  const effectiveLockedBranchId = !allowGlobalView && lockedBranchId ? lockedBranchId : null;
+  const isBranchScoped = Boolean(effectiveLockedBranchId);
   const [userScope, setUserScope] = useState<'global' | 'tenant'>(
     allowGlobalView ? 'global' : 'tenant'
   );
@@ -129,6 +133,8 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     legal_terms: tenant.legal_terms ?? '',
   });
   const [companyDirty, setCompanyDirty] = useState(false);
+  const [savingCompany, setSavingCompany] = useState(false);
+  const [companyErrorMsg, setCompanyErrorMsg] = useState<string | null>(null);
   const [companySavedMsg, setCompanySavedMsg] = useState<string | null>(null);
 
   const [waDraft, setWaDraft] = useState({
@@ -137,6 +143,8 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     ready_for_pickup: tenant.whatsapp_templates.ready_for_pickup,
   });
   const [waDirty, setWaDirty] = useState(false);
+  const [savingWa, setSavingWa] = useState(false);
+  const [waErrorMsg, setWaErrorMsg] = useState<string | null>(null);
   const [waSavedMsg, setWaSavedMsg] = useState<string | null>(null);
 
   useEffect(() => {
@@ -150,6 +158,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
       legal_terms: tenant.legal_terms ?? '',
     });
     setCompanyDirty(false);
+    setCompanyErrorMsg(null);
     setCompanySavedMsg(null);
     setWaDraft({
       intake: tenant.whatsapp_templates.intake,
@@ -157,6 +166,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
       ready_for_pickup: tenant.whatsapp_templates.ready_for_pickup,
     });
     setWaDirty(false);
+    setWaErrorMsg(null);
     setWaSavedMsg(null);
     setBranchError(null);
     setBranchSuccessMsg(null);
@@ -174,6 +184,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   }, [branches]);
 
   const [showNewBranch, setShowNewBranch] = useState(false);
+  const [submittingBranch, setSubmittingBranch] = useState(false);
   const [confirmDeleteBranchId, setConfirmDeleteBranchId] = useState<string | null>(null);
   const [deletingBranchId, setDeletingBranchId] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
@@ -192,7 +203,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   const [uPinOrPassword, setUPinOrPassword] = useState('');
   const [uRole, setURole] = useState<RoleType>('technician');
   const [uTenantId, setUTenantId] = useState<string>(tenant.id);
-  const [uBranchId, setUBranchId] = useState<string>('');
+  const [uBranchId, setUBranchId] = useState<string>(effectiveLockedBranchId ?? '');
 
   // Edit / Delete AppUser state
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -201,27 +212,30 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   const [eNewPassword, setENewPassword] = useState('');
   const [eRole, setERole] = useState<RoleType>('technician');
   const [eTenantId, setETenantId] = useState<string>(tenant.id);
-  const [eBranchId, setEBranchId] = useState<string>('');
+  const [eBranchId, setEBranchId] = useState<string>(effectiveLockedBranchId ?? '');
   const [savingEditUser, setSavingEditUser] = useState(false);
   const [confirmDeleteUserId, setConfirmDeleteUserId] = useState<string | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<string | null>(null);
 
   useEffect(() => {
+    setUTenantId(tenant.id);
     if (!allowGlobalView) {
-      setUTenantId(tenant.id);
-      if (uRole === 'superadmin') setURole('technician');
-    } else {
-      setUTenantId(tenant.id);
+      setURole((prev) => (prev === 'superadmin' ? 'technician' : prev));
     }
-    setUBranchId('');
-  }, [tenant.id, allowGlobalView, uRole]);
+    setUBranchId(effectiveLockedBranchId ?? '');
+  }, [tenant.id, allowGlobalView, effectiveLockedBranchId]);
 
-  const handleCreateBranch = (e: React.FormEvent) => {
+  const handleCreateBranch = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isBranchScoped) {
+      setBranchError('Un usuario asignado a una sucursal específica no puede crear sucursales adicionales.');
+      return;
+    }
     if (!bName.trim()) return;
     setBranchError(null);
     setBranchSuccessMsg(null);
-    onAddBranch({
+    setSubmittingBranch(true);
+    const res = await onAddBranch({
       id: generateUUID(),
       tenant_id: tenant.id,
       name: bName.trim(),
@@ -232,6 +246,11 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
       phone: bPhone.trim(),
       business_hours: bHours.trim(),
     });
+    setSubmittingBranch(false);
+    if (res && !res.ok) {
+      setBranchError(res.error ?? 'No se pudo crear la sucursal en Supabase.');
+      return;
+    }
     setBName('');
     setBCode('');
     setBCity('');
@@ -271,11 +290,19 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
         : allowGlobalView
         ? uTenantId || tenant.id
         : tenant.id;
+    const assignedBranchId =
+      assignedRole === 'superadmin'
+        ? null
+        : effectiveLockedBranchId
+        ? effectiveLockedBranchId
+        : uBranchId
+        ? uBranchId
+        : null;
 
     const newUser: AppUser = {
       id: generateUUID(),
       tenant_id: assignedTenantId,
-      branch_id: assignedRole === 'superadmin' ? null : uBranchId ? uBranchId : null,
+      branch_id: assignedBranchId,
       username: cleanUsername,
       pin_or_password: cleanPassword,
       full_name: cleanName,
@@ -298,7 +325,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     setUPinOrPassword('');
     setURole('technician');
     setUTenantId(tenant.id);
-    setUBranchId('');
+    setUBranchId(effectiveLockedBranchId ?? '');
     setShowNewUser(false);
     setCreatedUserInfo({ fullName: cleanName, username: cleanUsername });
   };
@@ -311,9 +338,18 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     setUserError(null);
     setUserSuccessMsg(null);
 
+    if (effectiveLockedBranchId && existing.branch_id !== effectiveLockedBranchId) {
+      setUserError('Solo puedes modificar usuarios asignados a tu propia sucursal.');
+      return;
+    }
+
+    const safePatch = effectiveLockedBranchId
+      ? { ...patch, branch_id: effectiveLockedBranchId }
+      : patch;
+
     const prepared = prepareAppUserUpdate({
       existing,
-      patch,
+      patch: safePatch,
       fallbackTenantId: tenant.id,
       allowGlobalView,
       allUsers: appUsers,
@@ -337,6 +373,10 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
   const openEditUser = (usr: AppUser) => {
     setUserError(null);
     setUserSuccessMsg(null);
+    if (effectiveLockedBranchId && usr.branch_id !== effectiveLockedBranchId) {
+      setUserError('Solo puedes editar usuarios asignados a tu propia sucursal.');
+      return;
+    }
     setConfirmDeleteUserId(null);
     setShowNewUser(false);
     setEditingUserId(usr.id);
@@ -345,7 +385,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
     setENewPassword('');
     setERole(usr.role);
     setETenantId(usr.tenant_id ?? tenant.id);
-    setEBranchId(usr.branch_id ?? '');
+    setEBranchId(effectiveLockedBranchId ?? usr.branch_id ?? '');
   };
 
   const closeEditUser = () => {
@@ -362,8 +402,22 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
       return;
     }
 
+    if (effectiveLockedBranchId && existing.branch_id !== effectiveLockedBranchId) {
+      setUserError('Solo puedes modificar usuarios asignados a tu propia sucursal.');
+      return;
+    }
+
     setUserError(null);
     setUserSuccessMsg(null);
+
+    const resolvedEditBranch =
+      eRole === 'superadmin'
+        ? null
+        : effectiveLockedBranchId
+        ? effectiveLockedBranchId
+        : eBranchId
+        ? eBranchId
+        : null;
 
     const prepared = prepareAppUserUpdate({
       existing,
@@ -372,7 +426,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
         username: eUsername,
         role: eRole,
         tenant_id: eRole === 'superadmin' ? null : eTenantId || tenant.id,
-        branch_id: eRole === 'superadmin' ? null : eBranchId ? eBranchId : null,
+        branch_id: resolvedEditBranch,
       },
       newPassword: eNewPassword,
       fallbackTenantId: tenant.id,
@@ -416,6 +470,12 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
       (usr.role === 'superadmin' || usr.tenant_id !== tenant.id)
     ) {
       setUserError('Solo SuperAdmin Global puede gestionar cuentas globales o de otras empresas.');
+      setConfirmDeleteUserId(null);
+      return;
+    }
+
+    if (effectiveLockedBranchId && usr.branch_id !== effectiveLockedBranchId) {
+      setUserError('Solo puedes eliminar usuarios asignados a tu propia sucursal.');
       setConfirmDeleteUserId(null);
       return;
     }
@@ -501,9 +561,12 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-6 items-start">
             {/* Company & Tax Config */}
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
-                onUpdateTenant({
+                setCompanyErrorMsg(null);
+                setCompanySavedMsg(null);
+                setSavingCompany(true);
+                const res = await onUpdateTenant({
                   ...tenant,
                   name: companyDraft.name.trim() || tenant.name,
                   tax_id: companyDraft.tax_id.trim(),
@@ -513,6 +576,13 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   warranty_days: Math.max(0, Number(companyDraft.warranty_days) || 0),
                   legal_terms: companyDraft.legal_terms,
                 });
+                setSavingCompany(false);
+                if (res && !res.ok) {
+                  setCompanyErrorMsg(
+                    res.error ?? 'No se pudieron sincronizar los datos de la empresa.'
+                  );
+                  return;
+                }
                 setCompanyDirty(false);
                 setCompanySavedMsg('Datos de empresa y parámetros actualizados.');
               }}
@@ -531,6 +601,14 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   </span>
                 )}
               </div>
+
+              {companyErrorMsg && (
+                <AlertBanner
+                  variant="error"
+                  message={companyErrorMsg}
+                  onDismiss={() => setCompanyErrorMsg(null)}
+                />
+              )}
 
               {companySavedMsg && !companyDirty && (
                 <AlertBanner
@@ -677,23 +755,30 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                 </div>
               </div>
 
+              <p className="text-[11px] text-slate-500">
+                Los datos generales, IVA, prefijo, garantía estándar y términos legales se sincronizan en Supabase (con respaldo automático si las columnas opcionales aún no están migradas).
+              </p>
+
               <div className="flex justify-end pt-2 border-t border-[#D8E4EC]/60">
                 <button
                   type="submit"
-                  disabled={!companyDirty}
+                  disabled={!companyDirty || savingCompany}
                   className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-xs font-semibold text-white transition-colors"
                 >
                   <Check className="h-3.5 w-3.5" />
-                  <span>Guardar Datos de Empresa</span>
+                  <span>{savingCompany ? 'Guardando...' : 'Guardar Datos de Empresa'}</span>
                 </button>
               </div>
             </form>
 
             {/* Master WhatsApp Switch & Templates */}
             <form
-              onSubmit={(e) => {
+              onSubmit={async (e) => {
                 e.preventDefault();
-                onUpdateTenant({
+                setWaErrorMsg(null);
+                setWaSavedMsg(null);
+                setSavingWa(true);
+                const res = await onUpdateTenant({
                   ...tenant,
                   whatsapp_templates: {
                     intake: waDraft.intake,
@@ -701,6 +786,13 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                     ready_for_pickup: waDraft.ready_for_pickup,
                   },
                 });
+                setSavingWa(false);
+                if (res && !res.ok) {
+                  setWaErrorMsg(
+                    res.error ?? 'No se pudieron sincronizar las plantillas de WhatsApp.'
+                  );
+                  return;
+                }
                 setWaDirty(false);
                 setWaSavedMsg('Plantillas de WhatsApp guardadas.');
               }}
@@ -723,12 +815,18 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                     role="switch"
                     aria-checked={tenant.whatsapp_enabled}
                     aria-label="Activar o desactivar WhatsApp para toda la empresa"
-                    onClick={() =>
-                      onUpdateTenant({
+                    onClick={async () => {
+                      setWaErrorMsg(null);
+                      const res = await onUpdateTenant({
                         ...tenant,
                         whatsapp_enabled: !tenant.whatsapp_enabled,
-                      })
-                    }
+                      });
+                      if (res && !res.ok) {
+                        setWaErrorMsg(
+                          res.error ?? 'No se pudo actualizar el estado de WhatsApp.'
+                        );
+                      }
+                    }}
                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
                       tenant.whatsapp_enabled ? 'bg-[#1B998B]' : 'bg-slate-300'
                     }`}
@@ -741,6 +839,14 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   </button>
                 </div>
               </div>
+
+              {waErrorMsg && (
+                <AlertBanner
+                  variant="error"
+                  message={waErrorMsg}
+                  onDismiss={() => setWaErrorMsg(null)}
+                />
+              )}
 
               {waSavedMsg && !waDirty && (
                 <AlertBanner
@@ -807,14 +913,18 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                 </div>
               </div>
 
+              <p className="text-[11px] text-slate-500">
+                Tanto el interruptor general como las plantillas de WhatsApp se sincronizan en Supabase (con respaldo automático si la columna opcional aún no existe).
+              </p>
+
               <div className="flex justify-end pt-2 border-t border-[#D8E4EC]/60">
                 <button
                   type="submit"
-                  disabled={!waDirty}
+                  disabled={!waDirty || savingWa}
                   className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2 text-xs font-semibold text-white transition-colors"
                 >
                   <Check className="h-3.5 w-3.5" />
-                  <span>Guardar Plantillas WhatsApp</span>
+                  <span>{savingWa ? 'Guardando...' : 'Guardar Plantillas WhatsApp'}</span>
                 </button>
               </div>
             </form>
@@ -829,14 +939,20 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   Casa Matriz y Sucursales ({tenantBranches.length})
                 </h2>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowNewBranch((v) => !v)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                <span>Agregar Sucursal</span>
-              </button>
+              {!isBranchScoped ? (
+                <button
+                  type="button"
+                  onClick={() => setShowNewBranch((v) => !v)}
+                  className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-3.5 py-2 text-xs font-semibold transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  <span>Agregar Sucursal</span>
+                </button>
+              ) : (
+                <span className="text-[11px] font-medium text-slate-500">
+                  Operación limitada a tu sucursal asignada
+                </span>
+              )}
             </div>
 
             {branchError && (
@@ -855,7 +971,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
               />
             )}
 
-            {showNewBranch && (
+            {showNewBranch && !isBranchScoped && (
               <form
                 onSubmit={handleCreateBranch}
                 className="rounded-2xl bg-[#F4F6FB] border border-[#D8E4EC] p-4 space-y-3"
@@ -905,6 +1021,9 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                     className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-900 focus:border-[#3E92CC] focus:outline-none transition-colors"
                   />
                 </div>
+                <p className="text-[11px] text-slate-500">
+                  Todos los datos de la sucursal (incluyendo ciudad y horario) se sincronizan en Supabase, con respaldo automático si las columnas extendidas aún no existen.
+                </p>
                 <div className="flex justify-end gap-2">
                   <button
                     type="button"
@@ -915,9 +1034,10 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   </button>
                   <button
                     type="submit"
-                    className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] px-4 py-2 text-xs font-semibold text-white transition-colors"
+                    disabled={submittingBranch}
+                    className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 px-4 py-2 text-xs font-semibold text-white transition-colors"
                   >
-                    Crear Sucursal
+                    {submittingBranch ? 'Creando...' : 'Crear Sucursal'}
                   </button>
                 </div>
               </form>
@@ -1200,7 +1320,15 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   <select
                     aria-label="Rol del nuevo usuario"
                     value={uRole}
-                    onChange={(e) => setURole(e.target.value as RoleType)}
+                    onChange={(e) => {
+                      const nextRole = e.target.value as RoleType;
+                      setURole(nextRole);
+                      if (nextRole === 'superadmin') {
+                        setUBranchId('');
+                      } else if (effectiveLockedBranchId) {
+                        setUBranchId(effectiveLockedBranchId);
+                      }
+                    }}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                   >
                     <option value="technician">technician (Técnico)</option>
@@ -1244,17 +1372,21 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   </label>
                   <select
                     aria-label="Sucursal del nuevo usuario"
-                    value={uBranchId}
-                    disabled={uRole === 'superadmin'}
+                    value={effectiveLockedBranchId ?? uBranchId}
+                    disabled={uRole === 'superadmin' || isBranchScoped}
                     onChange={(e) => setUBranchId(e.target.value)}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 disabled:bg-slate-100 focus:border-[#3E92CC] focus:outline-none"
                   >
-                    <option value="">Global (Casa Matriz / Todas)</option>
-                    {newUserTenantBranches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name} ({b.code})
-                      </option>
-                    ))}
+                    {!isBranchScoped && (
+                      <option value="">Global (Casa Matriz / Todas)</option>
+                    )}
+                    {newUserTenantBranches
+                      .filter((b) => !effectiveLockedBranchId || b.id === effectiveLockedBranchId)
+                      .map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.code})
+                        </option>
+                      ))}
                   </select>
                 </div>
               </div>
@@ -1346,7 +1478,15 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   <select
                     aria-label="Editar rol de usuario"
                     value={eRole}
-                    onChange={(e) => setERole(e.target.value as RoleType)}
+                    onChange={(e) => {
+                      const nextRole = e.target.value as RoleType;
+                      setERole(nextRole);
+                      if (nextRole === 'superadmin') {
+                        setEBranchId('');
+                      } else if (effectiveLockedBranchId) {
+                        setEBranchId(effectiveLockedBranchId);
+                      }
+                    }}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                   >
                     <option value="technician">technician (Técnico)</option>
@@ -1390,17 +1530,21 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                   </label>
                   <select
                     aria-label="Editar sucursal de usuario"
-                    value={eRole === 'superadmin' ? '' : eBranchId}
-                    disabled={eRole === 'superadmin'}
+                    value={eRole === 'superadmin' ? '' : effectiveLockedBranchId ?? eBranchId}
+                    disabled={eRole === 'superadmin' || isBranchScoped}
                     onChange={(e) => setEBranchId(e.target.value)}
                     className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 disabled:bg-slate-100 focus:border-[#3E92CC] focus:outline-none"
                   >
-                    <option value="">Global (Casa Matriz / Todas)</option>
-                    {editUserTenantBranches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name} ({b.code})
-                      </option>
-                    ))}
+                    {!isBranchScoped && (
+                      <option value="">Global (Casa Matriz / Todas)</option>
+                    )}
+                    {editUserTenantBranches
+                      .filter((b) => !effectiveLockedBranchId || b.id === effectiveLockedBranchId)
+                      .map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name} ({b.code})
+                        </option>
+                      ))}
                   </select>
                 </div>
               </div>
@@ -1464,6 +1608,9 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                       : 'Global Multiempresa';
                     const isSelf = Boolean(currentUserId && usr.id === currentUserId);
                     const isEditing = editingUserId === usr.id;
+                    const canManageThisUser =
+                      perms.canManageUsers &&
+                      (!effectiveLockedBranchId || usr.branch_id === effectiveLockedBranchId);
 
                     return (
                       <tr
@@ -1500,7 +1647,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                           </td>
                         )}
                         <td className="py-3 px-3">
-                          {perms.canManageUsers ? (
+                          {canManageThisUser ? (
                             <select
                               aria-label={`Rol de ${usr.full_name}`}
                               value={usr.role}
@@ -1529,7 +1676,7 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                             <span className="text-[11px] font-semibold text-[#0A2463]">
                               Global Multiempresa (null)
                             </span>
-                          ) : perms.canManageUsers ? (
+                          ) : canManageThisUser && !isBranchScoped ? (
                             <select
                               aria-label={`Sucursal de ${usr.full_name}`}
                               value={usr.branch_id ?? ''}
@@ -1558,14 +1705,14 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         <td className="py-3 px-3 text-center">
                           <button
                             type="button"
-                            disabled={!perms.canManageUsers}
+                            disabled={!canManageThisUser}
                             aria-label={`Cambiar estado de ${usr.full_name}`}
                             onClick={() =>
                               void handlePatchUser(usr, {
                                 is_active: !usr.is_active,
                               })
                             }
-                            className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors ${
+                            className={`rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors disabled:opacity-60 ${
                               usr.is_active
                                 ? 'bg-[#EBF8F6] border-[#1B998B]/30 text-[#1B998B]'
                                 : 'bg-[#F4F6FB] border-[#D8E4EC] text-slate-500'
@@ -1576,7 +1723,11 @@ export const SettingsBranchesView: React.FC<SettingsBranchesViewProps> = ({
                         </td>
                         {perms.canManageUsers && (
                           <td className="py-3 px-3 text-right whitespace-nowrap">
-                            {confirmDeleteUserId === usr.id ? (
+                            {!canManageThisUser ? (
+                              <span className="text-[11px] font-medium text-slate-400">
+                                Otra sucursal
+                              </span>
+                            ) : confirmDeleteUserId === usr.id ? (
                               <div className="inline-flex items-center justify-end gap-2">
                                 <button
                                   type="button"

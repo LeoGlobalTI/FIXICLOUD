@@ -4,7 +4,6 @@ import type {
   AppUser,
   AuthSessionUser,
   Branch,
-  RoleType,
   SupabaseConfig,
   Tenant,
 } from '../types/erp';

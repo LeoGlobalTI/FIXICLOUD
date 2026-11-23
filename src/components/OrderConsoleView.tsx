@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   CreditCard,
   Home,
+  ImageOff,
   Laptop,
   MessageCircle,
   PackagePlus,
@@ -45,8 +46,11 @@ import {
   canDeductCatalogStock,
   filterWorkOrders,
   formatCurrency,
+  getLocalIsoDate,
   getRolePermissions,
   getSectorCustomFields,
+  hasActiveUnreturnedLoan,
+  isSafeImageUrl,
 } from '../utils/erpLogic';
 import { getSectorIconMeta } from '../utils/sectorMeta';
 import { compressImageToWebP } from '../utils/imageCompression';
@@ -78,9 +82,13 @@ interface OrderConsoleViewProps {
   onUpdateOrder: (order: WorkOrder) => void;
   onUpdateClient: (client: Client) => void;
   onUpdateAsset: (asset: CustomerAsset) => void;
-  onAdjustCatalogStock: (catalogItemId: string, delta: number) => void;
+  onAdjustCatalogStock: (
+    catalogItemId: string,
+    delta: number
+  ) => Promise<{ ok: boolean; error?: string }> | void;
   onAssignLoanAsset: (orderId: string, loanAssetId: string, notes: string) => void;
   onReturnLoanAsset: (orderId: string) => void;
+  onDeleteOrder?: (orderId: string) => Promise<{ ok: boolean; error?: string }>;
   onDeleteOrderItem?: (itemId: string) => void;
   onDeleteOrderPhoto?: (photoId: string, photoUrl?: string) => void;
   onDeleteOrderPayment?: (paymentId: string) => void;
@@ -113,6 +121,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   onAdjustCatalogStock,
   onAssignLoanAsset,
   onReturnLoanAsset,
+  onDeleteOrder,
   onDeleteOrderItem,
   onDeleteOrderPhoto,
   onDeleteOrderPayment,
@@ -147,6 +156,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const [payRef, setPayRef] = useState('');
   const [paymentErrorMsg, setPaymentErrorMsg] = useState<string | null>(null);
   const [pendingDeliveryWarning, setPendingDeliveryWarning] = useState(false);
+  const [loanDeliveryBlocked, setLoanDeliveryBlocked] = useState(false);
 
   // Zone 3 local inputs
   const [photoUrlInput, setPhotoUrlInput] = useState('');
@@ -155,14 +165,20 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [photoStatusMsg, setPhotoStatusMsg] = useState<string | null>(null);
   const [lightboxPhoto, setLightboxPhoto] = useState<WorkOrderPhoto | null>(null);
+  const [failedPhotoIds, setFailedPhotoIds] = useState<Record<string, boolean>>({});
 
   const [loanAssetToAssign, setLoanAssetToAssign] = useState('');
   const [loanNotes, setLoanNotes] = useState('');
+  const [adjustingCatalog, setAdjustingCatalog] = useState(false);
+  const [confirmDeleteOrder, setConfirmDeleteOrder] = useState(false);
+  const [deletingOrder, setDeletingOrder] = useState(false);
+  const [orderDeleteError, setOrderDeleteError] = useState<string | null>(null);
 
   // WhatsApp modal
   const [showWhatsAppModal, setShowWhatsAppModal] = useState(false);
 
   const perms = getRolePermissions(activeRole);
+  const canEditPhotos = perms.canEditDiagnosis || perms.canManageClients;
   const techFullName = activeUser?.full_name?.trim() ?? '';
   const techUsername = activeUser?.username?.trim() ?? '';
   const techFilterLabel = techFullName || techUsername || 'Por asignar';
@@ -210,6 +226,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   const clientMap = useMemo(() => new Map(clients.map((c) => [c.id, c])), [clients]);
   const assetMap = useMemo(() => new Map(assets.map((a) => [a.id, a])), [assets]);
   const branchMap = useMemo(() => new Map(branches.map((b) => [b.id, b])), [branches]);
+  const catalogSkuMap = useMemo(
+    () => new Map(catalogItems.map((c) => [c.id, c.sku])),
+    [catalogItems]
+  );
 
   const activeClient = activeOrder ? clientMap.get(activeOrder.client_id) : undefined;
   const activeAsset = activeOrder ? assetMap.get(activeOrder.asset_id) : undefined;
@@ -296,9 +316,13 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     setStockErrorMsg(null);
     setPaymentErrorMsg(null);
     setPendingDeliveryWarning(false);
+    setLoanDeliveryBlocked(false);
+    setConfirmDeleteOrder(false);
+    setOrderDeleteError(null);
     setSelectedCatalogId('');
     setLoanAssetToAssign('');
     setPhotoStatusMsg(null);
+    setFailedPhotoIds({});
     if (activeClient) {
       setClientDraft({
         name: activeClient.name,
@@ -404,8 +428,8 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     setZ2SavedMsg('Diagnóstico, informe y garantía guardados.');
   };
 
-  const handleAddCatalogItem = () => {
-    if (!activeOrder || !perms.canEditFinancials) return;
+  const handleAddCatalogItem = async () => {
+    if (!activeOrder || !perms.canEditFinancials || adjustingCatalog) return;
     const itemId = selectedCatalogId || branchCatalog[0]?.id;
     const cat = branchCatalog.find((c) => c.id === itemId);
     if (!cat) return;
@@ -417,6 +441,21 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       return;
     }
     setStockErrorMsg(null);
+    if (cat.category === 'part') {
+      setAdjustingCatalog(true);
+      try {
+        const res = await onAdjustCatalogStock(cat.id, -qty);
+        if (res && !res.ok) {
+          setStockErrorMsg(
+            res.error ??
+              `No se pudo descontar stock de "${cat.name}". Verifica la disponibilidad actual.`
+          );
+          return;
+        }
+      } finally {
+        setAdjustingCatalog(false);
+      }
+    }
     const newItem: WorkOrderItem = {
       id: generateUUID(),
       source: 'catalog',
@@ -426,9 +465,6 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
       qty,
       unit_price: cat.sale_price,
     };
-    if (cat.category === 'part') {
-      onAdjustCatalogStock(cat.id, -qty);
-    }
     patchOrder({ items: [...activeOrder.items, newItem] });
     setCatalogQty(1);
   };
@@ -451,12 +487,24 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     setFreePrice('');
   };
 
-  const handleRemoveOrderItem = (item: WorkOrderItem) => {
-    if (!activeOrder || !perms.canEditFinancials) return;
+  const handleRemoveOrderItem = async (item: WorkOrderItem) => {
+    if (!activeOrder || !perms.canEditFinancials || adjustingCatalog) return;
     if (item.source === 'catalog' && item.catalog_item_id) {
       const cat = catalogItems.find((c) => c.id === item.catalog_item_id);
       if (!cat || cat.category === 'part') {
-        onAdjustCatalogStock(item.catalog_item_id, item.qty);
+        setAdjustingCatalog(true);
+        try {
+          const res = await onAdjustCatalogStock(item.catalog_item_id, item.qty);
+          if (res && !res.ok) {
+            setStockErrorMsg(
+              res.error ??
+                'No se pudo reponer el stock en Supabase al eliminar este ítem.'
+            );
+            return;
+          }
+        } finally {
+          setAdjustingCatalog(false);
+        }
       }
     }
     onDeleteOrderItem?.(item.id);
@@ -464,6 +512,24 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
   };
 
   const canDeletePayments = activeRole === 'admin' || activeRole === 'superadmin';
+  const canDeleteOrder =
+    Boolean(onDeleteOrder) && (activeRole === 'admin' || activeRole === 'superadmin');
+
+  const handleConfirmDeleteOrder = async () => {
+    if (!activeOrder || !onDeleteOrder || !canDeleteOrder || deletingOrder) return;
+    setDeletingOrder(true);
+    setOrderDeleteError(null);
+    try {
+      const res = await onDeleteOrder(activeOrder.id);
+      if (!res.ok) {
+        setOrderDeleteError(res.error ?? 'No se pudo eliminar la orden.');
+      } else {
+        setConfirmDeleteOrder(false);
+      }
+    } finally {
+      setDeletingOrder(false);
+    }
+  };
 
   const handleAddPayment = (e: React.FormEvent) => {
     e.preventDefault();
@@ -482,7 +548,7 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     setPaymentErrorMsg(null);
     const payment: WorkOrderPayment = {
       id: generateUUID(),
-      date: new Date().toISOString().slice(0, 10),
+      date: getLocalIsoDate(),
       amount: amt,
       method: payMethod,
       reference: payRef.trim() || undefined,
@@ -503,10 +569,18 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
 
   const handleAddPhotoUrl = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeOrder || !photoUrlInput.trim()) return;
+    if (!activeOrder || !canEditPhotos) return;
+    const trimmedUrl = photoUrlInput.trim();
+    if (!trimmedUrl) return;
+    if (!isSafeImageUrl(trimmedUrl)) {
+      setPhotoStatusMsg(
+        'URL inválida. Ingresa una dirección http(s):// o data:image válida.'
+      );
+      return;
+    }
     const photo: WorkOrderPhoto = {
       id: generateUUID(),
-      url: photoUrlInput.trim(),
+      url: trimmedUrl,
       stage: photoStage,
       caption: photoCaption.trim() || 'Evidencia técnica adjunta',
       created_at: new Date().toISOString(),
@@ -514,10 +588,11 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
     patchOrder({ photos: [...activeOrder.photos, photo] });
     setPhotoUrlInput('');
     setPhotoCaption('');
+    setPhotoStatusMsg('Fotografía adjuntada a la orden.');
   };
 
   const handlePhotoFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!activeOrder || !e.target.files?.[0]) return;
+    if (!activeOrder || !canEditPhotos || !e.target.files?.[0]) return;
     const file = e.target.files[0];
     e.target.value = '';
     setUploadingPhoto(true);
@@ -586,8 +661,12 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
 
   const isStatusOptionDisabled = (st: OrderStatus): boolean => {
     if (!activeOrder || st === activeOrder.status) return false;
-    if (activeRole === 'technician') return st === 'delivered';
+    if (activeRole === 'technician') {
+      return activeOrder.status === 'delivered' || st === 'delivered';
+    }
     if (activeRole === 'receptionist') {
+      if (activeOrder.status === 'delivered') return true;
+      if (activeOrder.status === 'received' && st === 'delivered') return true;
       return st !== 'received' && st !== 'waiting_approval' && st !== 'delivered';
     }
     return false;
@@ -921,12 +1000,29 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                               onChange={(e) => {
                                 const nextSt = e.target.value as OrderStatus;
                                 if (isStatusOptionDisabled(nextSt)) return;
+                                if (
+                                  nextSt === 'delivered' &&
+                                  hasActiveUnreturnedLoan(activeOrder)
+                                ) {
+                                  setLoanDeliveryBlocked(true);
+                                  setPendingDeliveryWarning(false);
+                                  return;
+                                }
+                                setLoanDeliveryBlocked(false);
                                 if (nextSt === 'delivered' && financials.balanceDue > 0) {
                                   setPendingDeliveryWarning(true);
                                   return;
                                 }
                                 setPendingDeliveryWarning(false);
-                                patchOrder({ status: nextSt });
+                                patchOrder({
+                                  status: nextSt,
+                                  delivered_at:
+                                    nextSt === 'delivered'
+                                      ? activeOrder.delivered_at ?? new Date().toISOString()
+                                      : activeOrder.status === 'delivered'
+                                      ? null
+                                      : activeOrder.delivered_at,
+                                });
                               }}
                               className="rounded-xl border border-[#D8E4EC] bg-[#F4F6FB] px-3 py-1.5 text-xs font-semibold text-slate-900 focus:bg-white focus:border-[#3E92CC] focus:outline-none transition-colors"
                             >
@@ -971,6 +1067,21 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             >
                               <MessageCircle className="h-3.5 w-3.5" />
                               <span>WhatsApp desactivado</span>
+                            </button>
+                          )}
+
+                          {canDeleteOrder && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setConfirmDeleteOrder((v) => !v);
+                                setOrderDeleteError(null);
+                              }}
+                              title="Eliminar orden"
+                              aria-label="Eliminar orden"
+                              className="inline-flex items-center justify-center rounded-xl border border-[#D8E4EC] bg-white hover:bg-red-50 hover:border-red-200 text-slate-500 hover:text-red-600 p-1.5 transition-colors shrink-0"
+                            >
+                              <Trash2 className="h-4 w-4" />
                             </button>
                           )}
                         </div>
@@ -1032,6 +1143,28 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                   </div>
                 </div>
 
+                {loanDeliveryBlocked && (
+                  <div
+                    role="alert"
+                    className="rounded-xl bg-[#FDEDED] border border-[#D64545]/35 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="text-[#D64545] font-medium">
+                      La orden <span className="font-mono font-bold">{activeOrder.folio}</span> tiene un equipo de préstamo activo (
+                      <span className="font-mono font-bold">
+                        {activeOrder.loan?.asset_code}
+                      </span>
+                      ). Registra primero su devolución en Zona 3 antes de marcar como Entregado.
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLoanDeliveryBlocked(false)}
+                      className="rounded-lg border border-[#D64545]/30 bg-white px-3 py-1 font-semibold text-[#D64545] hover:bg-red-50 transition-colors"
+                    >
+                      Entendido
+                    </button>
+                  </div>
+                )}
+
                 {pendingDeliveryWarning && perms.canDeliverOrder && (
                   <div
                     role="alert"
@@ -1055,12 +1188,67 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                       <button
                         type="button"
                         onClick={() => {
+                          if (hasActiveUnreturnedLoan(activeOrder)) {
+                            setPendingDeliveryWarning(false);
+                            setLoanDeliveryBlocked(true);
+                            return;
+                          }
                           setPendingDeliveryWarning(false);
-                          patchOrder({ status: 'delivered' });
+                          patchOrder({
+                            status: 'delivered',
+                            delivered_at:
+                              activeOrder.delivered_at ?? new Date().toISOString(),
+                          });
                         }}
                         className="rounded-lg bg-[#0A2463] hover:bg-[#1E3A8A] px-3 py-1.5 font-semibold text-white transition-colors"
                       >
                         Confirmar Entrega con Saldo Pendiente
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {orderDeleteError && (
+                  <div
+                    role="alert"
+                    className="rounded-xl bg-[#FDEDED] border border-[#D64545]/35 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs text-[#D64545] font-medium"
+                  >
+                    <span>{orderDeleteError}</span>
+                    <button
+                      type="button"
+                      onClick={() => setOrderDeleteError(null)}
+                      className="rounded-lg border border-[#D64545]/30 bg-white px-3 py-1 font-semibold hover:bg-red-50 transition-colors"
+                    >
+                      Cerrar
+                    </button>
+                  </div>
+                )}
+
+                {confirmDeleteOrder && canDeleteOrder && (
+                  <div
+                    role="alert"
+                    className="rounded-xl bg-[#FDEDED] border border-[#D64545]/35 p-3.5 flex flex-wrap items-center justify-between gap-3 text-xs"
+                  >
+                    <div className="text-[#D64545] font-medium">
+                      ¿Eliminar permanentemente la orden{' '}
+                      <span className="font-mono font-bold">{activeOrder.folio}</span> y su historial? Esta acción no se puede deshacer.
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteOrder(false)}
+                        disabled={deletingOrder}
+                        className="rounded-lg border border-[#D8E4EC] bg-white px-3 py-1.5 font-semibold text-slate-700 hover:bg-[#F4F6FB] transition-colors"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleConfirmDeleteOrder}
+                        disabled={deletingOrder}
+                        className="rounded-lg bg-[#D64545] hover:bg-[#B93838] disabled:opacity-50 px-3 py-1.5 font-semibold text-white transition-colors"
+                      >
+                        {deletingOrder ? 'Eliminando...' : 'Confirmar Eliminación'}
                       </button>
                     </div>
                   </div>
@@ -1708,10 +1896,10 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             <button
                               type="button"
                               onClick={handleAddCatalogItem}
-                              disabled={branchCatalog.length === 0}
+                              disabled={branchCatalog.length === 0 || adjustingCatalog}
                               className="rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
                             >
-                              + Agregar Stock
+                              {adjustingCatalog ? 'Validando...' : '+ Agregar Stock'}
                             </button>
                           </div>
                         </div>
@@ -1800,7 +1988,9 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                                     }
                                   >
                                     {item.source === 'catalog'
-                                      ? item.sku ?? 'STOCK'
+                                      ? item.sku ||
+                                        catalogSkuMap.get(item.catalog_item_id ?? '') ||
+                                        'CATÁLOGO'
                                       : 'LIBRE'}
                                   </span>
                                 </td>
@@ -2082,78 +2272,84 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         Registro Fotográfico por Etapa ({activeOrder.photos.length})
                       </div>
 
-                      <form
-                        onSubmit={handleAddPhotoUrl}
-                        className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3.5 space-y-2.5"
-                      >
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                          <select
-                            value={photoStage}
-                            onChange={(e) =>
-                              setPhotoStage(e.target.value as PhotoStage)
-                            }
-                            aria-label="Etapa de la fotografía"
-                            className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                          >
-                            <option value="reception">Etapa: Recepción</option>
-                            <option value="diagnosis">Etapa: Diagnóstico</option>
-                            <option value="delivery">Etapa: Entrega</option>
-                          </select>
-                          <input
-                            type="text"
-                            value={photoCaption}
-                            onChange={(e) => setPhotoCaption(e.target.value)}
-                            placeholder="Descripción de evidencia (ej. Bisagra quebrada)"
-                            className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                          />
-                        </div>
-
-                        <div className="flex flex-wrap items-center gap-2">
-                          <input
-                            type="url"
-                            value={photoUrlInput}
-                            onChange={(e) => setPhotoUrlInput(e.target.value)}
-                            placeholder="Pegar URL de imagen o subir fotografía..."
-                            className="flex-1 min-w-[180px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                          />
-                          <button
-                            type="submit"
-                            className="rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
-                          >
-                            + Agregar URL
-                          </button>
-                          <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap">
-                            <Camera className="h-3.5 w-3.5" />
-                            <span>Tomar Foto</span>
+                      {canEditPhotos ? (
+                        <form
+                          onSubmit={handleAddPhotoUrl}
+                          className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3.5 space-y-2.5"
+                        >
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                            <select
+                              value={photoStage}
+                              onChange={(e) =>
+                                setPhotoStage(e.target.value as PhotoStage)
+                              }
+                              aria-label="Etapa de la fotografía"
+                              className="rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs font-medium text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                            >
+                              <option value="reception">Etapa: Recepción</option>
+                              <option value="diagnosis">Etapa: Diagnóstico</option>
+                              <option value="delivery">Etapa: Entrega</option>
+                            </select>
                             <input
-                              type="file"
-                              accept="image/*"
-                              capture="environment"
-                              disabled={uploadingPhoto}
-                              onChange={handlePhotoFileUpload}
-                              className="hidden"
+                              type="text"
+                              value={photoCaption}
+                              onChange={(e) => setPhotoCaption(e.target.value)}
+                              placeholder="Descripción de evidencia (ej. Bisagra quebrada)"
+                              className="sm:col-span-2 rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
                             />
-                          </label>
-                          <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap">
-                            <Upload className="h-3.5 w-3.5" />
-                            <span>
-                              {uploadingPhoto ? 'Procesando WebP...' : 'Subir Foto WebP'}
-                            </span>
-                            <input
-                              type="file"
-                              accept="image/*"
-                              disabled={uploadingPhoto}
-                              onChange={handlePhotoFileUpload}
-                              className="hidden"
-                            />
-                          </label>
-                        </div>
-                        {photoStatusMsg && (
-                          <div className="text-[11px] font-medium text-[#3E92CC]">
-                            {photoStatusMsg}
                           </div>
-                        )}
-                      </form>
+
+                          <div className="flex flex-wrap items-center gap-2">
+                            <input
+                              type="url"
+                              value={photoUrlInput}
+                              onChange={(e) => setPhotoUrlInput(e.target.value)}
+                              placeholder="Pegar URL de imagen o subir fotografía..."
+                              className="flex-1 min-w-[180px] rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              className="rounded-xl bg-[#0A2463] hover:bg-[#1E3A8A] text-white px-3.5 py-2 text-xs font-semibold transition-colors whitespace-nowrap"
+                            >
+                              + Agregar URL
+                            </button>
+                            <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#1B998B] hover:bg-[#157A6E] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap">
+                              <Camera className="h-3.5 w-3.5" />
+                              <span>Tomar Foto</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                capture="environment"
+                                disabled={uploadingPhoto}
+                                onChange={handlePhotoFileUpload}
+                                className="hidden"
+                              />
+                            </label>
+                            <label className="inline-flex items-center gap-1.5 rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] text-white px-3.5 py-2 text-xs font-semibold cursor-pointer transition-colors whitespace-nowrap">
+                              <Upload className="h-3.5 w-3.5" />
+                              <span>
+                                {uploadingPhoto ? 'Procesando WebP...' : 'Subir Foto WebP'}
+                              </span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                disabled={uploadingPhoto}
+                                onChange={handlePhotoFileUpload}
+                                className="hidden"
+                              />
+                            </label>
+                          </div>
+                          {photoStatusMsg && (
+                            <div className="text-[11px] font-medium text-[#3E92CC]">
+                              {photoStatusMsg}
+                            </div>
+                          )}
+                        </form>
+                      ) : (
+                        <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-3 text-xs text-slate-600">
+                          Tu rol actual permite visualizar evidencias adjuntas en modo lectura.
+                        </div>
+                      )}
 
                       {activeOrder.photos.length === 0 ? (
                         <div className="rounded-xl border border-dashed border-[#D8E4EC] bg-[#F4F6FB]/40 p-6 text-center text-xs text-slate-500">
@@ -2161,49 +2357,68 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                         </div>
                       ) : (
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-                          {activeOrder.photos.map((photo) => (
-                            <div
-                              key={photo.id}
-                              className="rounded-xl border border-[#D8E4EC]/80 overflow-hidden bg-white shadow-sm"
-                            >
-                              <button
-                                type="button"
-                                onClick={() => setLightboxPhoto(photo)}
-                                className="block w-full aspect-video bg-[#F4F6FB] overflow-hidden"
+                          {activeOrder.photos.map((photo) => {
+                            const hasFailed = Boolean(failedPhotoIds[photo.id]);
+                            return (
+                              <div
+                                key={photo.id}
+                                className="rounded-xl border border-[#D8E4EC]/80 overflow-hidden bg-white shadow-sm"
                               >
-                                <img
-                                  src={photo.url}
-                                  alt={photo.caption}
-                                  referrerPolicy="no-referrer"
-                                  className="h-full w-full object-cover hover:scale-105 transition-transform duration-200"
-                                />
-                              </button>
-                              <div className="p-3 flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <span className="inline-flex items-center rounded-full bg-[#EBF4FA] px-2 py-0.5 text-[10px] font-semibold text-[#3E92CC]">
-                                    {photo.stage === 'reception'
-                                      ? 'Recepción'
-                                      : photo.stage === 'diagnosis'
-                                      ? 'Diagnóstico'
-                                      : 'Entrega'}
-                                  </span>
-                                  <p className="mt-1 text-xs text-slate-700 line-clamp-2">
-                                    {photo.caption}
-                                  </p>
+                                <button
+                                  type="button"
+                                  disabled={hasFailed}
+                                  onClick={() => !hasFailed && setLightboxPhoto(photo)}
+                                  className="block w-full aspect-video bg-[#F4F6FB] overflow-hidden disabled:cursor-default"
+                                >
+                                  {hasFailed ? (
+                                    <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-slate-400">
+                                      <ImageOff className="h-6 w-6" />
+                                      <span className="text-[11px] font-medium">
+                                        Imagen no disponible
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <img
+                                      src={photo.url}
+                                      alt={photo.caption}
+                                      referrerPolicy="no-referrer"
+                                      onError={() =>
+                                        setFailedPhotoIds((prev) => ({
+                                          ...prev,
+                                          [photo.id]: true,
+                                        }))
+                                      }
+                                      className="h-full w-full object-cover hover:scale-105 transition-transform duration-200"
+                                    />
+                                  )}
+                                </button>
+                                <div className="p-3 flex items-start justify-between gap-2">
+                                  <div className="min-w-0">
+                                    <span className="inline-flex items-center rounded-full bg-[#EBF4FA] px-2 py-0.5 text-[10px] font-semibold text-[#3E92CC]">
+                                      {photo.stage === 'reception'
+                                        ? 'Recepción'
+                                        : photo.stage === 'diagnosis'
+                                        ? 'Diagnóstico'
+                                        : 'Entrega'}
+                                    </span>
+                                    <p className="mt-1 text-xs text-slate-700 line-clamp-2">
+                                      {photo.caption}
+                                    </p>
+                                  </div>
+                                  {perms.canDeletePhotos && (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleDeletePhoto(photo.id)}
+                                      aria-label={`Eliminar foto ${photo.caption}`}
+                                      className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 shrink-0 transition-colors"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
                                 </div>
-                                {perms.canDeletePhotos && (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleDeletePhoto(photo.id)}
-                                    aria-label={`Eliminar foto ${photo.caption}`}
-                                    className="p-1 rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 shrink-0 transition-colors"
-                                  >
-                                    <Trash2 className="h-3.5 w-3.5" />
-                                  </button>
-                                )}
                               </div>
-                            </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -2251,71 +2466,79 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                             </div>
                           )}
                         </div>
-                      ) : activeOrder.loan?.returned_at ? (
-                        <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 p-4 space-y-1">
-                          <div className="text-xs font-bold text-[#157A6E]">
-                            Préstamo Devuelto Conforme
-                          </div>
-                          <div className="text-xs text-slate-700">
-                            {activeOrder.loan.asset_code} —{' '}
-                            {activeOrder.loan.asset_name}
-                          </div>
-                          <div className="text-[11px] text-slate-500 font-mono">
-                            Devuelto:{' '}
-                            {new Date(
-                              activeOrder.loan.returned_at
-                            ).toLocaleDateString('es-CL')}
-                          </div>
-                        </div>
-                      ) : perms.canManageOrderLoans ? (
-                        <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 space-y-3">
-                          <p className="text-xs text-slate-600 leading-relaxed">
-                            Asigna un equipo de respaldo disponible mientras se repara el equipo del cliente.
-                          </p>
-                          <select
-                            value={loanAssetToAssign || availableLoans[0]?.id || ''}
-                            onChange={(e) => setLoanAssetToAssign(e.target.value)}
-                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                          >
-                            {availableLoans.length === 0 ? (
-                              <option value="">No hay equipos disponibles</option>
-                            ) : (
-                              availableLoans.map((l) => (
-                                <option key={l.id} value={l.id}>
-                                  {l.code}: {l.name}
-                                </option>
-                              ))
-                            )}
-                          </select>
-                          <input
-                            type="text"
-                            value={loanNotes}
-                            onChange={(e) => setLoanNotes(e.target.value)}
-                            placeholder="Accesorios entregados en préstamo..."
-                            className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
-                          />
-                          <button
-                            type="button"
-                            disabled={availableLoans.length === 0}
-                            onClick={() => {
-                              const targetId =
-                                loanAssetToAssign || availableLoans[0]?.id;
-                              if (!targetId) return;
-                              onAssignLoanAsset(
-                                activeOrder.id,
-                                targetId,
-                                loanNotes.trim() || 'Entregado en préstamo operativo'
-                              );
-                              setLoanNotes('');
-                            }}
-                            className="w-full rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors"
-                          >
-                            Asignar Equipo en Préstamo
-                          </button>
-                        </div>
                       ) : (
-                        <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 text-xs text-slate-600 leading-relaxed">
-                          Sin equipo en préstamo asignado. La asignación o devolución de equipos en préstamo corresponde a Recepción o Administración.
+                        <div className="space-y-3">
+                          {activeOrder.loan?.returned_at && (
+                            <div className="rounded-xl bg-[#EBF8F6] border border-[#1B998B]/30 p-4 space-y-1">
+                              <div className="text-xs font-bold text-[#157A6E]">
+                                Último Préstamo Devuelto Conforme
+                              </div>
+                              <div className="text-xs text-slate-700">
+                                {activeOrder.loan.asset_code} —{' '}
+                                {activeOrder.loan.asset_name}
+                              </div>
+                              <div className="text-[11px] text-slate-500 font-mono">
+                                Devuelto:{' '}
+                                {new Date(
+                                  activeOrder.loan.returned_at
+                                ).toLocaleDateString('es-CL')}
+                              </div>
+                            </div>
+                          )}
+
+                          {perms.canManageOrderLoans ? (
+                            <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 space-y-3">
+                              <p className="text-xs text-slate-600 leading-relaxed">
+                                {activeOrder.loan?.returned_at
+                                  ? '¿Necesitas asignar un nuevo equipo de respaldo a esta orden?'
+                                  : 'Asigna un equipo de respaldo disponible mientras se repara el equipo del cliente.'}
+                              </p>
+                              <select
+                                value={loanAssetToAssign || availableLoans[0]?.id || ''}
+                                onChange={(e) => setLoanAssetToAssign(e.target.value)}
+                                className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                              >
+                                {availableLoans.length === 0 ? (
+                                  <option value="">No hay equipos disponibles</option>
+                                ) : (
+                                  availableLoans.map((l) => (
+                                    <option key={l.id} value={l.id}>
+                                      {l.code}: {l.name}
+                                    </option>
+                                  ))
+                                )}
+                              </select>
+                              <input
+                                type="text"
+                                value={loanNotes}
+                                onChange={(e) => setLoanNotes(e.target.value)}
+                                placeholder="Accesorios entregados en préstamo..."
+                                className="w-full rounded-xl border border-[#D8E4EC] bg-white px-3 py-2 text-xs text-slate-800 focus:border-[#3E92CC] focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                disabled={availableLoans.length === 0}
+                                onClick={() => {
+                                  const targetId =
+                                    loanAssetToAssign || availableLoans[0]?.id;
+                                  if (!targetId) return;
+                                  onAssignLoanAsset(
+                                    activeOrder.id,
+                                    targetId,
+                                    loanNotes.trim() || 'Entregado en préstamo operativo'
+                                  );
+                                  setLoanNotes('');
+                                }}
+                                className="w-full rounded-xl bg-[#3E92CC] hover:bg-[#3178A8] disabled:opacity-50 text-white px-3.5 py-2 text-xs font-semibold transition-colors"
+                              >
+                                Asignar Equipo en Préstamo
+                              </button>
+                            </div>
+                          ) : !activeOrder.loan?.returned_at ? (
+                            <div className="rounded-xl bg-[#F4F6FB]/70 border border-[#D8E4EC]/80 p-4 text-xs text-slate-600 leading-relaxed">
+                              Sin equipo en préstamo asignado. La asignación o devolución de equipos en préstamo corresponde a Recepción o Administración.
+                            </div>
+                          ) : null}
                         </div>
                       )}
                     </div>
@@ -2352,13 +2575,26 @@ export const OrderConsoleView: React.FC<OrderConsoleViewProps> = ({
                 <X className="h-4 w-4" />
               </button>
             </div>
-            <div className="bg-slate-900 flex items-center justify-center max-h-[75vh]">
-              <img
-                src={lightboxPhoto.url}
-                alt={lightboxPhoto.caption}
-                referrerPolicy="no-referrer"
-                className="max-h-[75vh] w-auto object-contain"
-              />
+            <div className="bg-slate-900 flex items-center justify-center max-h-[75vh] min-h-[220px]">
+              {failedPhotoIds[lightboxPhoto.id] ? (
+                <div className="flex flex-col items-center gap-2 text-slate-400 p-8">
+                  <ImageOff className="h-8 w-8" />
+                  <span className="text-xs">Imagen no disponible</span>
+                </div>
+              ) : (
+                <img
+                  src={lightboxPhoto.url}
+                  alt={lightboxPhoto.caption}
+                  referrerPolicy="no-referrer"
+                  onError={() =>
+                    setFailedPhotoIds((prev) => ({
+                      ...prev,
+                      [lightboxPhoto.id]: true,
+                    }))
+                  }
+                  className="max-h-[75vh] w-auto object-contain"
+                />
+              )}
             </div>
           </div>
         </div>
